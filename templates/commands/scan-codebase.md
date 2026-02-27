@@ -2,6 +2,14 @@
 
 Perform a 2-pass progressive scan of the codebase. Write findings to knowledge files. Then auto-start the architect loop.
 
+## Setup
+
+Ensure `mac10` is on PATH:
+
+```bash
+export PATH="$(pwd)/.claude/scripts:$PATH"
+```
+
 ## Pass 1: Structure (zero file reads)
 
 1. List all top-level directories and their purpose:

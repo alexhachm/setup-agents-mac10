@@ -2,6 +2,14 @@
 
 Lightweight startup scan for the Allocator agent (Master-3). Gathers just enough context to make good allocation decisions.
 
+## Setup
+
+Ensure `mac10` is on PATH:
+
+```bash
+export PATH="$(pwd)/.claude/scripts:$PATH"
+```
+
 ## Steps
 
 1. Check current system state:

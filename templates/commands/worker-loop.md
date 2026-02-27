@@ -10,7 +10,15 @@ Track these in your working memory throughout this session:
 - `context_budget` = 0 — increment by ~1000 per file read, ~2000 per task completed
 - `domain_lock` = null — set on first task, validated on subsequent tasks
 
-## Step 1: Startup — Read Knowledge
+## Step 1: Startup
+
+First, ensure `mac10` is on PATH. Run this before any other command:
+
+```bash
+export PATH="$(pwd)/.claude/scripts:$PATH"
+```
+
+### Read Knowledge
 
 Read these files to learn from previous work:
 - `.claude/knowledge/mistakes.md` — avoid repeating known errors

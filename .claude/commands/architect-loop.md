@@ -12,6 +12,12 @@ Track these in your working memory throughout this session:
 
 ## Startup
 
+First, ensure `mac10` is on PATH. Run this before any other command:
+
+```bash
+export PATH="$(pwd)/.claude/scripts:$PATH"
+```
+
 Read context files if they exist:
 - `.claude/knowledge/codebase-insights.md`
 - `.claude/knowledge/patterns.md`
