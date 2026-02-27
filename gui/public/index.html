@@ -12,6 +12,7 @@
     <h1>mac10</h1>
     <span id="status-indicator" class="status-dot disconnected"></span>
     <span id="status-text">Connecting...</span>
+    <button id="hotkey-trigger-btn" class="hotkey-trigger-btn" title="Hotkey Manager (?)">&#9000;</button>
   </header>
 
   <main>
@@ -129,6 +130,89 @@
     <div id="settings-panel" class="settings-panel" style="display:none">
       <div class="settings-panel-title"></div>
       <div class="settings-panel-items"></div>
+    </div>
+
+    <!-- Hotkey Manager Modal -->
+    <div id="hotkey-overlay" class="hotkey-overlay" style="display:none">
+      <div class="hotkey-modal">
+        <div class="hotkey-modal-header">
+          <h2 style="margin-bottom:0;font-size:14px;text-transform:none;letter-spacing:0;color:#c9d1d9">Hotkey Manager</h2>
+          <span class="hotkey-hint">Press <kbd>?</kbd> to open</span>
+          <button id="hotkey-close-btn" class="hotkey-close">&times;</button>
+        </div>
+
+        <div class="hotkey-body">
+          <!-- Add Binding Form -->
+          <div class="hotkey-add-form">
+            <div class="hotkey-form-row">
+              <div class="hotkey-field">
+                <label>Key Combo</label>
+                <div id="hotkey-capture" class="hotkey-capture" tabindex="0">Click to record...</div>
+              </div>
+              <div class="hotkey-field" style="flex:1">
+                <label>Action</label>
+                <select id="hotkey-action-type">
+                  <option value="builtin">Built-in Action</option>
+                  <option value="script">Custom Script</option>
+                </select>
+              </div>
+              <div class="hotkey-field hotkey-builtin-field" style="flex:1">
+                <label>Built-in</label>
+                <select id="hotkey-builtin-action">
+                  <option value="focus:request">Focus request input</option>
+                  <option value="submit:request">Submit request</option>
+                  <option value="toggle:setup">Toggle setup panel</option>
+                  <option value="toggle:hotkeys">Toggle hotkey manager</option>
+                  <option value="scroll:top">Scroll to top</option>
+                  <option value="scroll:bottom">Scroll to bottom</option>
+                </select>
+              </div>
+              <button id="hotkey-add-btn" class="hotkey-add-btn">Add</button>
+            </div>
+            <div class="hotkey-script-field" style="display:none">
+              <label>Script</label>
+              <textarea id="hotkey-script" rows="3" placeholder="// e.g. document.getElementById('request-input').focus()"></textarea>
+            </div>
+          </div>
+
+          <!-- Bindings List -->
+          <div class="hotkey-list-header">
+            <span>Active Bindings</span>
+            <span style="font-size:11px;color:#484f58" id="hotkey-count">0 bindings</span>
+          </div>
+          <div id="hotkey-bindings-list" class="hotkey-bindings-list">
+            <div class="hotkey-empty">No hotkeys configured. Add one above.</div>
+          </div>
+
+          <!-- Help Reference -->
+          <details class="hotkey-help">
+            <summary>Action Reference &amp; Scripting Docs</summary>
+            <div class="hotkey-help-content">
+              <h3>Built-in Actions</h3>
+              <table class="hotkey-help-table">
+                <tr><td><code>focus:request</code></td><td>Focus the request input field</td></tr>
+                <tr><td><code>submit:request</code></td><td>Submit the current request</td></tr>
+                <tr><td><code>toggle:setup</code></td><td>Toggle the setup panel open/closed</td></tr>
+                <tr><td><code>toggle:hotkeys</code></td><td>Open/close this hotkey manager</td></tr>
+                <tr><td><code>scroll:top</code></td><td>Scroll to top of page</td></tr>
+                <tr><td><code>scroll:bottom</code></td><td>Scroll to bottom of page</td></tr>
+              </table>
+              <h3>Custom Scripts</h3>
+              <p>Custom scripts execute as JavaScript in the page context. Examples:</p>
+              <pre class="hotkey-help-code">// Focus and clear request input
+var el = document.getElementById('request-input');
+el.focus();
+el.value = '';</pre>
+              <pre class="hotkey-help-code">// Click the launch setup button
+document.getElementById('launch-btn').click();</pre>
+              <pre class="hotkey-help-code">// Toggle a panel's visibility
+var p = document.getElementById('log-panel');
+p.style.display = p.style.display === 'none' ? '' : 'none';</pre>
+              <p class="hotkey-help-note">A full scripting language with variables, loops, and macros is planned for Phase 3.</p>
+            </div>
+          </details>
+        </div>
+      </div>
     </div>
   </main>
 

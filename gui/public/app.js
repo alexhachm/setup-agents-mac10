@@ -570,6 +570,283 @@
     }
   });
 
+  // --- Hotkey Manager ---
+
+  var HOTKEY_STORAGE_KEY = 'mac10_hotkeys';
+  var hotkeyBindings = [];
+  var capturedCombo = null;
+  var isRecording = false;
+
+  var hotkeyOverlay = document.getElementById('hotkey-overlay');
+  var hotkeyCaptureEl = document.getElementById('hotkey-capture');
+  var hotkeyActionType = document.getElementById('hotkey-action-type');
+  var hotkeyBuiltinAction = document.getElementById('hotkey-builtin-action');
+  var hotkeyScriptEl = document.getElementById('hotkey-script');
+  var hotkeyAddBtn = document.getElementById('hotkey-add-btn');
+  var hotkeyBindingsList = document.getElementById('hotkey-bindings-list');
+  var hotkeyCountEl = document.getElementById('hotkey-count');
+  var hotkeyBuiltinField = document.querySelector('.hotkey-builtin-field');
+  var hotkeyScriptField = document.querySelector('.hotkey-script-field');
+
+  function loadBindings() {
+    try {
+      var stored = localStorage.getItem(HOTKEY_STORAGE_KEY);
+      hotkeyBindings = stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      hotkeyBindings = [];
+    }
+  }
+
+  function saveBindings() {
+    localStorage.setItem(HOTKEY_STORAGE_KEY, JSON.stringify(hotkeyBindings));
+  }
+
+  function comboToString(combo) {
+    var parts = [];
+    if (combo.ctrl) parts.push('Ctrl');
+    if (combo.alt) parts.push('Alt');
+    if (combo.shift) parts.push('Shift');
+    if (combo.meta) parts.push('Meta');
+    if (combo.key) parts.push(combo.key.length === 1 ? combo.key.toUpperCase() : combo.key);
+    return parts.join(' + ');
+  }
+
+  function comboToId(combo) {
+    return [
+      combo.ctrl ? 'c' : '',
+      combo.alt ? 'a' : '',
+      combo.shift ? 's' : '',
+      combo.meta ? 'm' : '',
+      (combo.key || '').toLowerCase()
+    ].join('-');
+  }
+
+  function matchesCombo(e, combo) {
+    return e.ctrlKey === !!combo.ctrl &&
+           e.altKey === !!combo.alt &&
+           e.shiftKey === !!combo.shift &&
+           e.metaKey === !!combo.meta &&
+           e.key.toLowerCase() === (combo.key || '').toLowerCase();
+  }
+
+  function executeBuiltinAction(action) {
+    switch (action) {
+      case 'focus:request':
+        document.getElementById('request-input').focus();
+        break;
+      case 'submit:request':
+        document.getElementById('request-btn').click();
+        break;
+      case 'toggle:setup':
+        document.getElementById('setup-toggle').click();
+        break;
+      case 'toggle:hotkeys':
+        toggleHotkeyManager();
+        break;
+      case 'scroll:top':
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        break;
+      case 'scroll:bottom':
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        break;
+    }
+  }
+
+  function executeBinding(binding) {
+    if (binding.type === 'builtin') {
+      executeBuiltinAction(binding.action);
+    } else if (binding.type === 'script') {
+      try {
+        new Function(binding.action)();
+      } catch (err) {
+        console.error('Hotkey script error:', err);
+      }
+    }
+  }
+
+  function renderBindings() {
+    if (hotkeyBindings.length === 0) {
+      hotkeyBindingsList.innerHTML = '<div class="hotkey-empty">No hotkeys configured. Add one above.</div>';
+      hotkeyCountEl.textContent = '0 bindings';
+      return;
+    }
+    hotkeyCountEl.textContent = hotkeyBindings.length + ' binding' + (hotkeyBindings.length === 1 ? '' : 's');
+    hotkeyBindingsList.innerHTML = hotkeyBindings.map(function(b, i) {
+      var actionLabel = b.type === 'builtin'
+        ? '<code>' + escapeHtml(b.action) + '</code>'
+        : 'Script: ' + escapeHtml(b.action.substring(0, 50)) + (b.action.length > 50 ? '...' : '');
+      return '<div class="hotkey-binding-row">' +
+        '<span class="hotkey-binding-keys">' + escapeHtml(comboToString(b.combo)) + '</span>' +
+        '<span class="hotkey-binding-action">' + actionLabel + '</span>' +
+        '<button class="hotkey-binding-delete" data-index="' + i + '" title="Remove">&times;</button>' +
+        '</div>';
+    }).join('');
+  }
+
+  function toggleHotkeyManager() {
+    if (hotkeyOverlay.style.display === 'none') {
+      hotkeyOverlay.style.display = '';
+      renderBindings();
+    } else {
+      hotkeyOverlay.style.display = 'none';
+      stopRecording();
+    }
+  }
+
+  function stopRecording() {
+    isRecording = false;
+    hotkeyCaptureEl.classList.remove('recording');
+    if (!capturedCombo) {
+      hotkeyCaptureEl.textContent = 'Click to record...';
+    }
+  }
+
+  // Open/close hotkey manager
+  document.getElementById('hotkey-trigger-btn').addEventListener('click', function() {
+    toggleHotkeyManager();
+  });
+
+  document.getElementById('hotkey-close-btn').addEventListener('click', function() {
+    hotkeyOverlay.style.display = 'none';
+    stopRecording();
+  });
+
+  // Close on overlay click (not modal)
+  hotkeyOverlay.addEventListener('click', function(e) {
+    if (e.target === hotkeyOverlay) {
+      hotkeyOverlay.style.display = 'none';
+      stopRecording();
+    }
+  });
+
+  // Toggle between builtin and script fields
+  hotkeyActionType.addEventListener('change', function() {
+    if (hotkeyActionType.value === 'script') {
+      hotkeyBuiltinField.style.display = 'none';
+      hotkeyScriptField.style.display = '';
+    } else {
+      hotkeyBuiltinField.style.display = '';
+      hotkeyScriptField.style.display = 'none';
+    }
+  });
+
+  // Key capture
+  hotkeyCaptureEl.addEventListener('click', function() {
+    isRecording = true;
+    capturedCombo = null;
+    hotkeyCaptureEl.textContent = 'Press keys...';
+    hotkeyCaptureEl.classList.add('recording');
+    hotkeyCaptureEl.focus();
+  });
+
+  hotkeyCaptureEl.addEventListener('keydown', function(e) {
+    if (!isRecording) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Ignore bare modifier keys
+    if (['Control', 'Alt', 'Shift', 'Meta'].indexOf(e.key) !== -1) return;
+
+    capturedCombo = {
+      ctrl: e.ctrlKey,
+      alt: e.altKey,
+      shift: e.shiftKey,
+      meta: e.metaKey,
+      key: e.key
+    };
+
+    hotkeyCaptureEl.textContent = comboToString(capturedCombo);
+    isRecording = false;
+    hotkeyCaptureEl.classList.remove('recording');
+  });
+
+  // Add binding
+  hotkeyAddBtn.addEventListener('click', function() {
+    if (!capturedCombo) return;
+
+    // Check for duplicate
+    var newId = comboToId(capturedCombo);
+    for (var i = 0; i < hotkeyBindings.length; i++) {
+      if (comboToId(hotkeyBindings[i].combo) === newId) {
+        hotkeyBindings.splice(i, 1);
+        break;
+      }
+    }
+
+    var binding = { combo: capturedCombo };
+    if (hotkeyActionType.value === 'script') {
+      var script = hotkeyScriptEl.value.trim();
+      if (!script) return;
+      binding.type = 'script';
+      binding.action = script;
+    } else {
+      binding.type = 'builtin';
+      binding.action = hotkeyBuiltinAction.value;
+    }
+
+    hotkeyBindings.push(binding);
+    saveBindings();
+    renderBindings();
+
+    // Reset form
+    capturedCombo = null;
+    hotkeyCaptureEl.textContent = 'Click to record...';
+    hotkeyScriptEl.value = '';
+  });
+
+  // Delete binding (event delegation)
+  hotkeyBindingsList.addEventListener('click', function(e) {
+    var deleteBtn = e.target.closest('.hotkey-binding-delete');
+    if (!deleteBtn) return;
+    var idx = parseInt(deleteBtn.getAttribute('data-index'), 10);
+    if (idx >= 0 && idx < hotkeyBindings.length) {
+      hotkeyBindings.splice(idx, 1);
+      saveBindings();
+      renderBindings();
+    }
+  });
+
+  // Global hotkey listener
+  document.addEventListener('keydown', function(e) {
+    // Don't fire hotkeys when typing in inputs (unless it has modifiers)
+    var target = e.target;
+    var isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
+
+    // Open hotkey manager with ? key (when not in an input)
+    if (e.key === '?' && !isInput && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      toggleHotkeyManager();
+      e.preventDefault();
+      return;
+    }
+
+    // Close hotkey manager with Escape
+    if (e.key === 'Escape' && hotkeyOverlay.style.display !== 'none') {
+      hotkeyOverlay.style.display = 'none';
+      stopRecording();
+      e.preventDefault();
+      return;
+    }
+
+    // Skip if recording keys in capture box
+    if (isRecording) return;
+
+    // Check all bindings
+    for (var i = 0; i < hotkeyBindings.length; i++) {
+      var b = hotkeyBindings[i];
+      if (matchesCombo(e, b.combo)) {
+        // For combos with modifiers, always fire. For bare keys, skip if in input.
+        var hasModifier = b.combo.ctrl || b.combo.alt || b.combo.meta;
+        if (!hasModifier && isInput) continue;
+        e.preventDefault();
+        executeBinding(b);
+        return;
+      }
+    }
+  });
+
+  // Load bindings on startup
+  loadBindings();
+
   // Initial load
   fetchConfig();
   fetchStatus();
