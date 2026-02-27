@@ -8,6 +8,231 @@
   let setupRunning = false;
   let gitPushing = false;
 
+  // --- Color-link system for panels ---
+  const LINK_COLORS = [null, '#f85149', '#58a6ff', '#3fb950', '#d29922', '#bc8cff'];
+  const LINK_COLOR_NAMES = ['none', 'red', 'blue', 'green', 'orange', 'purple'];
+  const LINK_SETTINGS_KEY = 'mac10_panel_links';
+  const PANEL_ORDER_KEY = 'mac10_panel_order';
+  const GRID_PANELS = ['workers', 'requests', 'tasks', 'log'];
+
+  function loadPanelLinks() {
+    try {
+      return JSON.parse(localStorage.getItem(LINK_SETTINGS_KEY) || '{}');
+    } catch (e) { return {}; }
+  }
+
+  function savePanelLinks(links) {
+    try { localStorage.setItem(LINK_SETTINGS_KEY, JSON.stringify(links)); } catch (e) { /* ignore */ }
+  }
+
+  function getPanelLinkColor(panelName) {
+    const links = loadPanelLinks();
+    return links[panelName] || null;
+  }
+
+  function cyclePanelLink(panelName) {
+    const links = loadPanelLinks();
+    const currentIdx = LINK_COLORS.indexOf(links[panelName] || null);
+    const nextIdx = (currentIdx + 1) % LINK_COLORS.length;
+    links[panelName] = LINK_COLORS[nextIdx];
+    if (!links[panelName]) delete links[panelName];
+    savePanelLinks(links);
+    updateAllLinkIndicators();
+  }
+
+  function updateAllLinkIndicators() {
+    document.querySelectorAll('.panel-header[data-panel]').forEach(function(header) {
+      const panel = header.getAttribute('data-panel');
+      const color = getPanelLinkColor(panel);
+      let dot = header.querySelector('.link-color-dot');
+      if (!dot) {
+        dot = document.createElement('span');
+        dot.className = 'link-color-dot';
+        dot.title = 'Click to cycle link color';
+        dot.addEventListener('click', function(e) {
+          e.stopPropagation();
+          cyclePanelLink(panel);
+        });
+        header.appendChild(dot);
+      }
+      if (color) {
+        dot.style.background = color;
+        dot.style.borderColor = color;
+        dot.classList.add('active');
+      } else {
+        dot.style.background = '';
+        dot.style.borderColor = '';
+        dot.classList.remove('active');
+      }
+    });
+  }
+
+  // --- Panel order persistence ---
+  function loadPanelOrder() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(PANEL_ORDER_KEY) || '[]');
+      if (saved.length === GRID_PANELS.length && GRID_PANELS.every(p => saved.includes(p))) {
+        return saved;
+      }
+    } catch (e) { /* ignore */ }
+    return GRID_PANELS.slice();
+  }
+
+  function savePanelOrder(order) {
+    try { localStorage.setItem(PANEL_ORDER_KEY, JSON.stringify(order)); } catch (e) { /* ignore */ }
+  }
+
+  function applyPanelOrder() {
+    const order = loadPanelOrder();
+    const grid = document.querySelector('.grid');
+    if (!grid) return;
+    order.forEach(function(panelName) {
+      var section = document.getElementById(panelName + '-panel');
+      if (section && section.parentNode === grid) {
+        grid.appendChild(section);
+      }
+    });
+  }
+
+  // --- Panel drag-and-drop ---
+  let draggedPanel = null;
+
+  function initPanelDrag() {
+    var grid = document.querySelector('.grid');
+    if (!grid) return;
+
+    grid.querySelectorAll('section').forEach(function(section) {
+      section.setAttribute('draggable', 'true');
+
+      section.addEventListener('dragstart', function(e) {
+        draggedPanel = section;
+        section.classList.add('panel-dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', section.id);
+      });
+
+      section.addEventListener('dragend', function() {
+        section.classList.remove('panel-dragging');
+        grid.querySelectorAll('.panel-drag-over').forEach(function(el) {
+          el.classList.remove('panel-drag-over');
+        });
+        draggedPanel = null;
+      });
+
+      section.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (draggedPanel && draggedPanel !== section) {
+          section.classList.add('panel-drag-over');
+        }
+      });
+
+      section.addEventListener('dragleave', function() {
+        section.classList.remove('panel-drag-over');
+      });
+
+      section.addEventListener('drop', function(e) {
+        e.preventDefault();
+        section.classList.remove('panel-drag-over');
+        if (!draggedPanel || draggedPanel === section) return;
+
+        var draggedName = draggedPanel.id.replace('-panel', '');
+        var targetName = section.id.replace('-panel', '');
+        var order = loadPanelOrder();
+        var dragIdx = order.indexOf(draggedName);
+        var targetIdx = order.indexOf(targetName);
+        if (dragIdx === -1 || targetIdx === -1) return;
+
+        var dragColor = getPanelLinkColor(draggedName);
+        if (dragColor) {
+          var linkedPanels = order.filter(function(p) { return getPanelLinkColor(p) === dragColor; });
+          if (linkedPanels.indexOf(targetName) !== -1) return;
+          var remaining = order.filter(function(p) { return getPanelLinkColor(p) !== dragColor; });
+          var insertIdx = remaining.indexOf(targetName);
+          if (insertIdx === -1) return;
+          var insertAt = (dragIdx < targetIdx) ? insertIdx + 1 : insertIdx;
+          for (var i = 0; i < linkedPanels.length; i++) {
+            remaining.splice(insertAt + i, 0, linkedPanels[i]);
+          }
+          order = remaining;
+        } else {
+          order.splice(dragIdx, 1);
+          var newIdx = order.indexOf(targetName);
+          if (dragIdx < targetIdx) {
+            order.splice(newIdx + 1, 0, draggedName);
+          } else {
+            order.splice(newIdx, 0, draggedName);
+          }
+        }
+
+        savePanelOrder(order);
+        applyPanelOrder();
+      });
+    });
+  }
+
+  // --- Column definitions per panel ---
+  const PANEL_COLUMNS = {
+    workers: [
+      { key: 'id', label: 'Worker' },
+      { key: 'status', label: 'Status' },
+      { key: 'domain', label: 'Domain' },
+      { key: 'current_task_id', label: 'Task' },
+    ],
+    requests: [
+      { key: 'id', label: 'ID' },
+      { key: 'status', label: 'Status' },
+      { key: 'tier', label: 'Tier' },
+      { key: 'description', label: 'Description' },
+    ],
+    tasks: [
+      { key: 'id', label: 'ID' },
+      { key: 'status', label: 'Status' },
+      { key: 'subject', label: 'Subject' },
+      { key: 'domain', label: 'Domain' },
+      { key: 'tier', label: 'Tier' },
+      { key: 'assigned_to', label: 'Assigned' },
+      { key: 'pr_url', label: 'PR' },
+    ],
+    log: [
+      { key: 'created_at', label: 'Time' },
+      { key: 'actor', label: 'Actor' },
+      { key: 'action', label: 'Action' },
+      { key: 'details', label: 'Details' },
+    ],
+  };
+
+  // --- Column order persistence ---
+  const SETTINGS_KEY = 'mac10_panel_settings';
+
+  function loadColumnOrder(panelName) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+      if (saved[panelName] && Array.isArray(saved[panelName])) {
+        const defaults = PANEL_COLUMNS[panelName].map(c => c.key);
+        const order = saved[panelName].filter(k => defaults.includes(k));
+        defaults.forEach(k => { if (!order.includes(k)) order.push(k); });
+        return order;
+      }
+    } catch (e) { /* ignore */ }
+    return PANEL_COLUMNS[panelName].map(c => c.key);
+  }
+
+  function saveColumnOrder(panelName, order) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+      saved[panelName] = order;
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(saved));
+    } catch (e) { /* ignore */ }
+  }
+
+  function getOrderedColumns(panelName) {
+    const order = loadColumnOrder(panelName);
+    const colMap = {};
+    PANEL_COLUMNS[panelName].forEach(c => { colMap[c.key] = c; });
+    return order.map(k => colMap[k]).filter(Boolean);
+  }
+
   function connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${location.host}`);
@@ -52,20 +277,52 @@
     renderTasks(data.tasks || []);
   }
 
+  // --- Column renderers per panel ---
+  const COLUMN_RENDERERS = {
+    workers: {
+      id: (w) => `<div class="worker-name">Worker ${w.id}</div>`,
+      status: (w) => `<span class="worker-status badge-${w.status}">${w.status}</span>`,
+      domain: (w) => w.domain ? `<div style="font-size:11px;color:#8b949e;margin-top:4px">${escapeHtml(w.domain)}</div>` : '',
+      current_task_id: (w) => w.current_task_id ? `<div style="font-size:11px;color:#58a6ff;margin-top:2px">Task #${w.current_task_id}</div>` : '',
+    },
+    requests: {
+      id: (r) => `<span class="req-id">${r.id}</span>`,
+      status: (r) => `<span class="worker-status badge-${r.status}">${r.status}</span>`,
+      tier: (r) => r.tier ? `<span style="font-size:11px;color:#d29922"> T${r.tier}</span>` : '',
+      description: (r) => `<div class="req-desc">${escapeHtml(r.description).slice(0, 100)}</div>`,
+    },
+    tasks: {
+      id: (t) => `<span style="color:#58a6ff">#${t.id}</span>`,
+      status: (t) => `<span class="worker-status badge-${t.status}">${t.status}</span>`,
+      subject: (t) => `<div class="task-subject">${escapeHtml(t.subject)}</div>`,
+      domain: (t) => t.domain ? `<span class="task-meta-field">[${escapeHtml(t.domain)}]</span>` : '',
+      tier: (t) => `<span class="task-meta-field">T${t.tier}</span>`,
+      assigned_to: (t) => t.assigned_to ? `<span class="task-meta-field">\u2192 worker-${escapeHtml(String(t.assigned_to))}</span>` : '',
+      pr_url: (t) => t.pr_url ? renderPrLink(t.pr_url) : '',
+    },
+    log: {
+      created_at: (l) => `<span class="log-time">${escapeHtml(l.created_at)}</span>`,
+      actor: (l) => `<span class="log-actor">${escapeHtml(l.actor)}</span>`,
+      action: (l) => `<span class="log-action">${escapeHtml(l.action)}</span>`,
+      details: (l) => l.details ? `<span style="color:#484f58">${escapeHtml(l.details.substring(0, 80))}</span>` : '',
+    },
+  };
+
+  function renderItemColumns(panelName, item) {
+    const cols = getOrderedColumns(panelName);
+    const renderers = COLUMN_RENDERERS[panelName];
+    return cols.map(c => renderers[c.key] ? renderers[c.key](item) : '').join('\n');
+  }
+
   function renderWorkers(workers) {
     const el = document.getElementById('workers-list');
     if (workers.length === 0) {
       el.innerHTML = '<div style="color:#8b949e;font-size:13px">No workers registered</div>';
       return;
     }
-    el.innerHTML = workers.map(w => `
-      <div class="worker-card">
-        <div class="worker-name">Worker ${w.id}</div>
-        <span class="worker-status badge-${w.status}">${w.status}</span>
-        ${w.domain ? `<div style="font-size:11px;color:#8b949e;margin-top:4px">${escapeHtml(w.domain)}</div>` : ''}
-        ${w.current_task_id ? `<div style="font-size:11px;color:#58a6ff;margin-top:2px">Task #${w.current_task_id}</div>` : ''}
-      </div>
-    `).join('');
+    el.innerHTML = workers.map(w =>
+      `<div class="worker-card">${renderItemColumns('workers', w)}</div>`
+    ).join('');
   }
 
   function renderRequests(requests) {
@@ -74,14 +331,9 @@
       el.innerHTML = '<div style="color:#8b949e;font-size:13px">No requests</div>';
       return;
     }
-    el.innerHTML = requests.slice(0, 20).map(r => `
-      <div class="request-item">
-        <span class="req-id">${r.id}</span>
-        <span class="worker-status badge-${r.status}">${r.status}</span>
-        ${r.tier ? `<span style="font-size:11px;color:#d29922"> T${r.tier}</span>` : ''}
-        <div class="req-desc">${escapeHtml(r.description).slice(0, 100)}</div>
-      </div>
-    `).join('');
+    el.innerHTML = requests.slice(0, 20).map(r =>
+      `<div class="request-item">${renderItemColumns('requests', r)}</div>`
+    ).join('');
   }
 
   function renderTasks(tasks) {
@@ -91,18 +343,9 @@
       el.innerHTML = '<div style="color:#8b949e;font-size:13px">No active tasks</div>';
       return;
     }
-    el.innerHTML = active.slice(0, 30).map(t => `
-      <div class="task-item">
-        <span style="color:#58a6ff">#${t.id}</span>
-        <span class="worker-status badge-${t.status}">${t.status}</span>
-        <div class="task-subject">${escapeHtml(t.subject)}</div>
-        <div class="task-meta">
-          ${t.domain ? `[${escapeHtml(t.domain)}]` : ''} T${t.tier}
-          ${t.assigned_to ? `→ worker-${escapeHtml(String(t.assigned_to))}` : ''}
-          ${t.pr_url ? renderPrLink(t.pr_url) : ''}
-        </div>
-      </div>
-    `).join('');
+    el.innerHTML = active.slice(0, 30).map(t =>
+      `<div class="task-item">${renderItemColumns('tasks', t)}</div>`
+    ).join('');
   }
 
   function fetchStatus() {
@@ -117,14 +360,9 @@
 
   function renderLog(logs) {
     const el = document.getElementById('log-list');
-    el.innerHTML = logs.reverse().slice(0, 50).map(l => `
-      <div class="log-entry">
-        <span class="log-time">${escapeHtml(l.created_at)}</span>
-        <span class="log-actor">${escapeHtml(l.actor)}</span>
-        <span class="log-action">${escapeHtml(l.action)}</span>
-        ${l.details ? `<span style="color:#484f58">${escapeHtml(l.details.substring(0, 80))}</span>` : ''}
-      </div>
-    `).join('');
+    el.innerHTML = logs.reverse().slice(0, 50).map(l =>
+      `<div class="log-entry">${renderItemColumns('log', l)}</div>`
+    ).join('');
   }
 
   function escapeHtml(str) {
@@ -447,6 +685,66 @@
 
     itemsEl.innerHTML = '';
 
+    // Color-link submenu
+    var currentColor = getPanelLinkColor(panelName);
+    var linkItem = document.createElement('div');
+    linkItem.className = 'settings-panel-item';
+    linkItem.innerHTML = '<span class="settings-icon">&#9679;</span> Link color';
+    var colorPicker = document.createElement('div');
+    colorPicker.className = 'link-color-picker';
+    LINK_COLORS.forEach(function(color, idx) {
+      var swatch = document.createElement('span');
+      swatch.className = 'link-color-swatch';
+      if (color) {
+        swatch.style.background = color;
+      } else {
+        swatch.classList.add('none');
+      }
+      if (color === currentColor) swatch.classList.add('selected');
+      swatch.title = LINK_COLOR_NAMES[idx];
+      swatch.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var links = loadPanelLinks();
+        if (color) {
+          links[panelName] = color;
+        } else {
+          delete links[panelName];
+        }
+        savePanelLinks(links);
+        updateAllLinkIndicators();
+        closeSettingsPanel();
+      });
+      colorPicker.appendChild(swatch);
+    });
+    linkItem.appendChild(colorPicker);
+    itemsEl.appendChild(linkItem);
+
+    // Configure columns option
+    const columnsItem = document.createElement('div');
+    columnsItem.className = 'settings-panel-item';
+    columnsItem.innerHTML = '<span class="settings-icon">&#9776;</span> Configure columns';
+    columnsItem.addEventListener('click', function() {
+      closeSettingsPanel();
+      openColumnConfig(panelName);
+    });
+    itemsEl.appendChild(columnsItem);
+
+    // Reset column order option
+    const resetItem = document.createElement('div');
+    resetItem.className = 'settings-panel-item';
+    resetItem.innerHTML = '<span class="settings-icon">&#8634;</span> Reset column order';
+    resetItem.addEventListener('click', function() {
+      saveColumnOrder(panelName, PANEL_COLUMNS[panelName].map(c => c.key));
+      closeSettingsPanel();
+      fetchStatus();
+    });
+    itemsEl.appendChild(resetItem);
+
+    // Divider
+    const divider = document.createElement('div');
+    divider.className = 'settings-panel-divider';
+    itemsEl.appendChild(divider);
+
     const popoutItem = document.createElement('div');
     popoutItem.className = 'settings-panel-item';
     popoutItem.innerHTML = '<span class="settings-icon">&#8599;</span> Open in new window';
@@ -473,6 +771,101 @@
     settingsPanel.style.display = 'none';
   }
 
+  // --- Column configuration modal ---
+  function openColumnConfig(panelName) {
+    const overlay = document.getElementById('column-config-overlay');
+    const title = document.getElementById('column-config-title');
+    const list = document.getElementById('column-config-list');
+    const titles = { workers: 'Workers', requests: 'Requests', tasks: 'Tasks', log: 'Activity Log' };
+
+    title.textContent = (titles[panelName] || panelName) + ' — Column Order';
+    overlay.setAttribute('data-panel', panelName);
+
+    const cols = getOrderedColumns(panelName);
+    list.innerHTML = '';
+
+    cols.forEach((col, idx) => {
+      const row = document.createElement('div');
+      row.className = 'column-config-row';
+      row.setAttribute('draggable', 'true');
+      row.setAttribute('data-key', col.key);
+
+      row.innerHTML =
+        '<span class="column-drag-handle">&#9776;</span>' +
+        '<span class="column-config-label">' + escapeHtml(col.label) + '</span>' +
+        '<span class="column-config-key">' + escapeHtml(col.key) + '</span>';
+
+      // Drag events
+      row.addEventListener('dragstart', function(e) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', col.key);
+        row.classList.add('dragging');
+      });
+
+      row.addEventListener('dragend', function() {
+        row.classList.remove('dragging');
+        document.querySelectorAll('.column-config-row.drag-over').forEach(el => el.classList.remove('drag-over'));
+      });
+
+      row.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const dragging = list.querySelector('.dragging');
+        if (dragging && dragging !== row) {
+          row.classList.add('drag-over');
+        }
+      });
+
+      row.addEventListener('dragleave', function() {
+        row.classList.remove('drag-over');
+      });
+
+      row.addEventListener('drop', function(e) {
+        e.preventDefault();
+        row.classList.remove('drag-over');
+        const draggedKey = e.dataTransfer.getData('text/plain');
+        const dragging = list.querySelector('[data-key="' + draggedKey + '"]');
+        if (dragging && dragging !== row) {
+          const allRows = Array.from(list.children);
+          const fromIdx = allRows.indexOf(dragging);
+          const toIdx = allRows.indexOf(row);
+          if (fromIdx < toIdx) {
+            list.insertBefore(dragging, row.nextSibling);
+          } else {
+            list.insertBefore(dragging, row);
+          }
+        }
+      });
+
+      list.appendChild(row);
+    });
+
+    overlay.style.display = 'flex';
+  }
+
+  function closeColumnConfig() {
+    document.getElementById('column-config-overlay').style.display = 'none';
+  }
+
+  function saveColumnConfig() {
+    const overlay = document.getElementById('column-config-overlay');
+    const panelName = overlay.getAttribute('data-panel');
+    const list = document.getElementById('column-config-list');
+    const rows = Array.from(list.querySelectorAll('.column-config-row'));
+    const order = rows.map(r => r.getAttribute('data-key'));
+
+    saveColumnOrder(panelName, order);
+    closeColumnConfig();
+    fetchStatus();
+  }
+
+  // Wire up column config modal buttons
+  document.getElementById('column-config-cancel').addEventListener('click', closeColumnConfig);
+  document.getElementById('column-config-save').addEventListener('click', saveColumnConfig);
+  document.getElementById('column-config-overlay').addEventListener('click', function(e) {
+    if (e.target === this) closeColumnConfig();
+  });
+
   document.querySelectorAll('.panel-header[data-panel]').forEach(function(header) {
     header.addEventListener('contextmenu', function(e) {
       e.preventDefault();
@@ -480,8 +873,10 @@
     });
   });
 
-  document.addEventListener('click', function() {
-    closeSettingsPanel();
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.settings-panel')) {
+      closeSettingsPanel();
+    }
   });
 
   document.addEventListener('contextmenu', function(e) {
@@ -494,4 +889,7 @@
   fetchConfig();
   fetchStatus();
   connect();
+  applyPanelOrder();
+  updateAllLinkIndicators();
+  initPanelDrag();
 })();
