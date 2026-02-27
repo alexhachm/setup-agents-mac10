@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mac10 Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>mac10</h1>
+    <span id="status-indicator" class="status-dot disconnected"></span>
+    <span id="status-text">Connecting...</span>
+  </header>
+
+  <main>
+    <section id="setup-panel">
+      <div id="setup-header">
+        <h2>Setup</h2>
+        <span id="setup-status"></span>
+        <button id="setup-toggle" style="display:none" title="Toggle setup panel">&#9660;</button>
+      </div>
+      <div id="setup-body">
+        <div id="setup-form">
+          <div class="setup-field">
+            <label for="project-dir">Project Directory</label>
+            <input type="text" id="project-dir" placeholder="/path/to/your-project" />
+          </div>
+          <div class="setup-field">
+            <label for="github-repo">GitHub Repo</label>
+            <input type="text" id="github-repo" placeholder="owner/repo" />
+          </div>
+          <div class="setup-field">
+            <label for="worker-count">Workers</label>
+            <input type="number" id="worker-count" min="1" max="8" value="4" />
+          </div>
+          <button id="launch-btn">Launch Setup</button>
+        </div>
+        <div id="setup-output" style="display:none">
+          <pre id="setup-log"></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="request-form">
+      <input type="text" id="request-input" placeholder="Describe your coding request..." />
+      <button id="request-btn">Submit Request</button>
+    </section>
+
+    <section id="git-panel">
+      <div id="git-header">
+        <h2>Git</h2>
+        <span id="git-repo-label"></span>
+      </div>
+      <div id="git-actions">
+        <button id="git-push-btn" disabled>Push to GitHub</button>
+        <span id="git-push-status"></span>
+      </div>
+      <div id="git-output" style="display:none">
+        <pre id="git-log"></pre>
+      </div>
+    </section>
+
+    <div class="grid">
+      <section id="workers-panel">
+        <h2>Workers</h2>
+        <div id="workers-list"></div>
+      </section>
+
+      <section id="requests-panel">
+        <h2>Requests</h2>
+        <div id="requests-list"></div>
+      </section>
+
+      <section id="tasks-panel">
+        <h2>Tasks</h2>
+        <div id="tasks-list"></div>
+      </section>
+    </div>
+
+    <section id="log-panel">
+      <h2>Activity Log</h2>
+      <div id="log-list"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

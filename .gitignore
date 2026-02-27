@@ -1,0 +1,7 @@
+node_modules/
+.claude/state/
+*.db
+*.db-shm
+*.db-wal
+*.log
+.worktrees/

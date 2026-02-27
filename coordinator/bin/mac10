@@ -1,0 +1,367 @@
+#!/usr/bin/env node
+'use strict';
+
+const net = require('net');
+const path = require('path');
+const fs = require('fs');
+
+// Find project dir by walking up to find .claude/state/mac10.sock or mac10.pipe
+function findSocketPath() {
+  // Check MAC10_SOCKET env first
+  if (process.env.MAC10_SOCKET) return process.env.MAC10_SOCKET;
+
+  let dir = process.cwd();
+  while (dir !== path.dirname(dir)) {
+    // On Windows, check for named pipe file
+    const pipeFile = path.join(dir, '.claude', 'state', 'mac10.pipe');
+    if (fs.existsSync(pipeFile)) {
+      return fs.readFileSync(pipeFile, 'utf8').trim();
+    }
+    // On Unix, check for socket file
+    const sock = path.join(dir, '.claude', 'state', 'mac10.sock');
+    if (fs.existsSync(sock)) return sock;
+    dir = path.dirname(dir);
+  }
+  console.error('Error: mac10 coordinator not running (no socket found)');
+  console.error('Run "mac10 start" from the project root first.');
+  process.exit(1);
+}
+
+function send(socketPath, command, args) {
+  return new Promise((resolve, reject) => {
+    const conn = net.createConnection(socketPath, () => {
+      conn.write(JSON.stringify({ command, args }) + '\n');
+    });
+    let data = '';
+    conn.on('data', (chunk) => {
+      data += chunk.toString();
+      const idx = data.indexOf('\n');
+      if (idx >= 0) {
+        try {
+          resolve(JSON.parse(data.slice(0, idx)));
+        } catch (e) {
+          reject(new Error('Invalid response'));
+        }
+        conn.end();
+      }
+    });
+    conn.on('error', (e) => {
+      if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') {
+        reject(new Error('Coordinator not running. Start with: mac10 start'));
+      } else {
+        reject(e);
+      }
+    });
+    // Timeout for blocking commands
+    const timeout = command === 'inbox-block' ? 600000 : 30000;
+    conn.setTimeout(timeout, () => {
+      conn.end();
+      resolve({ ok: true, messages: [] }); // timeout returns empty for blocking inbox
+    });
+  });
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  if (argv.length === 0) {
+    printUsage();
+    process.exit(0);
+  }
+
+  const cmd = argv[0];
+
+  // System commands that don't go through socket
+  if (cmd === 'start') {
+    const projectDir = argv[1] || process.cwd();
+    const coordinator = path.join(__dirname, '..', 'src', 'index.js');
+    console.log(`Starting mac10 coordinator for: ${projectDir}`);
+    const { execSync } = require('child_process');
+    try {
+      execSync(`node "${coordinator}" "${projectDir}" &`, { stdio: 'inherit', shell: true });
+    } catch (e) {
+      // Fork into background
+      const { fork } = require('child_process');
+      const child = fork(coordinator, [projectDir], { detached: true, stdio: 'ignore' });
+      child.unref();
+    }
+    // Wait for socket
+    const sockPath = path.join(projectDir, '.claude', 'state', 'mac10.sock');
+    for (let i = 0; i < 30; i++) {
+      if (fs.existsSync(sockPath)) {
+        console.log('Coordinator started.');
+        process.exit(0);
+      }
+      await new Promise(r => setTimeout(r, 200));
+    }
+    console.error('Coordinator failed to start within 6s');
+    process.exit(1);
+  }
+
+  if (cmd === 'stop') {
+    const socketPath = findSocketPath();
+    // Just remove the socket — coordinator watches for this
+    try { fs.unlinkSync(socketPath); } catch {}
+    console.log('Coordinator stopped.');
+    process.exit(0);
+  }
+
+  const socketPath = findSocketPath();
+
+  try {
+    let result;
+    switch (cmd) {
+      // USER
+      case 'request':
+        result = await send(socketPath, 'request', { description: argv.slice(1).join(' ') });
+        if (result.ok) console.log(`Request created: ${result.request_id}`);
+        else console.error(result.error);
+        break;
+
+      case 'fix':
+        result = await send(socketPath, 'fix', { description: argv.slice(1).join(' ') });
+        if (result.ok) console.log(`Urgent fix created: ${result.request_id} (task ${result.task_id})`);
+        else console.error(result.error);
+        break;
+
+      case 'status':
+        result = await send(socketPath, 'status', {});
+        if (result.ok) printStatus(result);
+        else console.error(result.error);
+        break;
+
+      case 'clarify':
+        result = await send(socketPath, 'clarify', {
+          request_id: argv[1],
+          message: argv.slice(2).join(' '),
+        });
+        if (result.ok) console.log('Clarification sent.');
+        else console.error(result.error);
+        break;
+
+      case 'log':
+        result = await send(socketPath, 'log', { limit: parseInt(argv[1]) || 50, actor: argv[2] });
+        if (result.ok) {
+          for (const entry of result.logs.reverse()) {
+            console.log(`[${entry.created_at}] ${entry.actor}: ${entry.action} ${entry.details || ''}`);
+          }
+        } else console.error(result.error);
+        break;
+
+      // ARCHITECT
+      case 'triage':
+        result = await send(socketPath, 'triage', {
+          request_id: argv[1],
+          tier: parseInt(argv[2]),
+          reasoning: argv.slice(3).join(' '),
+        });
+        if (result.ok) console.log('Triage recorded.');
+        else console.error(result.error);
+        break;
+
+      case 'create-task':
+        // JSON input from stdin or arg
+        const taskInput = argv[1] === '-' ? fs.readFileSync(0, 'utf8') : argv.slice(1).join(' ');
+        const taskArgs = JSON.parse(taskInput);
+        result = await send(socketPath, 'create-task', taskArgs);
+        if (result.ok) console.log(`Task created: ${result.task_id}`);
+        else console.error(result.error);
+        break;
+
+      case 'tier1-complete':
+        result = await send(socketPath, 'tier1-complete', {
+          request_id: argv[1],
+          result: argv.slice(2).join(' '),
+        });
+        if (result.ok) console.log('Tier 1 completed.');
+        else console.error(result.error);
+        break;
+
+      case 'ask-clarification':
+        result = await send(socketPath, 'ask-clarification', {
+          request_id: argv[1],
+          question: argv.slice(2).join(' '),
+        });
+        if (result.ok) console.log('Clarification request sent.');
+        else console.error(result.error);
+        break;
+
+      // WORKER
+      case 'my-task':
+        result = await send(socketPath, 'my-task', { worker_id: parseInt(argv[1]) });
+        if (result.ok) {
+          if (result.task) {
+            console.log(JSON.stringify(result.task, null, 2));
+          } else {
+            console.log('No task assigned.');
+          }
+        } else console.error(result.error);
+        break;
+
+      case 'start-task':
+        result = await send(socketPath, 'start-task', {
+          worker_id: parseInt(argv[1]),
+          task_id: parseInt(argv[2]),
+        });
+        if (result.ok) console.log('Task started.');
+        else console.error(result.error);
+        break;
+
+      case 'heartbeat':
+        result = await send(socketPath, 'heartbeat', { worker_id: parseInt(argv[1]) });
+        if (result.ok) console.log('ok');
+        else console.error(result.error);
+        break;
+
+      case 'complete-task':
+        result = await send(socketPath, 'complete-task', {
+          worker_id: parseInt(argv[1]),
+          task_id: parseInt(argv[2]),
+          pr_url: argv[3] || '',
+          branch: argv[4] || '',
+          result: argv.slice(5).join(' ') || '',
+        });
+        if (result.ok) console.log('Task completed.');
+        else console.error(result.error);
+        break;
+
+      case 'fail-task':
+        result = await send(socketPath, 'fail-task', {
+          worker_id: parseInt(argv[1]),
+          task_id: parseInt(argv[2]),
+          error: argv.slice(3).join(' '),
+        });
+        if (result.ok) console.log('Task failure recorded.');
+        else console.error(result.error);
+        break;
+
+      case 'distill':
+        result = await send(socketPath, 'distill', {
+          worker_id: parseInt(argv[1]),
+          domain: argv[2],
+          content: argv.slice(3).join(' '),
+        });
+        if (result.ok) console.log('Knowledge distilled.');
+        else console.error(result.error);
+        break;
+
+      case 'inbox': {
+        const recipient = argv[1];
+        const block = argv.includes('--block');
+        const peek = argv.includes('--peek');
+        const timeout = parseInt(argv.find(a => a.startsWith('--timeout='))?.split('=')[1]) || 300000;
+        if (block) {
+          result = await send(socketPath, 'inbox-block', { recipient, timeout });
+        } else {
+          result = await send(socketPath, 'inbox', { recipient, peek });
+        }
+        if (result.ok) {
+          if (result.messages.length === 0) {
+            console.log('No messages.');
+          } else {
+            for (const msg of result.messages) {
+              console.log(JSON.stringify(msg));
+            }
+          }
+        } else console.error(result.error);
+        break;
+      }
+
+      // SYSTEM
+      case 'repair':
+        result = await send(socketPath, 'repair', {});
+        if (result.ok) console.log(`Repaired: ${result.reset_workers} workers, ${result.orphaned_tasks} tasks`);
+        else console.error(result.error);
+        break;
+
+      case 'gui':
+        console.log('Dashboard: http://localhost:3100');
+        break;
+
+      case 'ping':
+        result = await send(socketPath, 'ping', {});
+        if (result.ok) console.log(`pong (${Date.now() - result.ts}ms)`);
+        else console.error(result.error);
+        break;
+
+      default:
+        console.error(`Unknown command: ${cmd}`);
+        printUsage();
+        process.exit(1);
+    }
+  } catch (e) {
+    console.error(`Error: ${e.message}`);
+    process.exit(1);
+  }
+}
+
+function printUsage() {
+  console.log(`
+mac10 — Multi-agent coordinator CLI
+
+USER:
+  request <description>          Submit a new coding request
+  fix <description>              Submit an urgent fix (priority queue)
+  status                         Show all requests, tasks, and workers
+  clarify <request_id> <msg>     Reply to architect clarification
+  log [limit] [actor]            Show activity log
+
+ARCHITECT:
+  triage <request_id> <tier> [reasoning]
+  create-task <json>             Create task (JSON from stdin with -)
+  tier1-complete <request_id> [result]
+  ask-clarification <request_id> <question>
+  inbox <recipient> [--block] [--peek]
+
+WORKER:
+  my-task <worker_id>            Get current assigned task
+  start-task <worker_id> <task_id>
+  heartbeat <worker_id>
+  complete-task <worker_id> <task_id> [pr_url] [branch] [result]
+  fail-task <worker_id> <task_id> <error>
+  distill <worker_id> <domain> <content>
+
+SYSTEM:
+  start [project_dir]            Start coordinator
+  stop                           Stop coordinator
+  repair                         Fix stuck state
+  gui                            Show dashboard URL
+  ping                           Check coordinator health
+`.trim());
+}
+
+function printStatus(data) {
+  console.log('\n=== Requests ===');
+  if (data.requests.length === 0) {
+    console.log('  (none)');
+  } else {
+    for (const r of data.requests) {
+      console.log(`  ${r.id} [${r.status}] ${r.tier ? `T${r.tier}` : '  '} ${r.description.slice(0, 60)}`);
+    }
+  }
+
+  console.log('\n=== Workers ===');
+  if (data.workers.length === 0) {
+    console.log('  (none registered)');
+  } else {
+    for (const w of data.workers) {
+      const task = w.current_task_id ? ` task:${w.current_task_id}` : '';
+      const dom = w.domain ? ` [${w.domain}]` : '';
+      const hb = w.last_heartbeat ? ` hb:${w.last_heartbeat}` : '';
+      console.log(`  worker-${w.id} [${w.status}]${dom}${task}${hb}`);
+    }
+  }
+
+  console.log('\n=== Tasks ===');
+  const activeTasks = data.tasks.filter(t => t.status !== 'completed');
+  if (activeTasks.length === 0) {
+    console.log('  (none active)');
+  } else {
+    for (const t of activeTasks) {
+      const worker = t.assigned_to ? ` → worker-${t.assigned_to}` : '';
+      console.log(`  #${t.id} [${t.status}] ${t.subject.slice(0, 50)}${worker}`);
+    }
+  }
+  console.log('');
+}
+
+main().catch(e => { console.error(e); process.exit(1); });

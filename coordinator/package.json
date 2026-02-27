@@ -1,0 +1,22 @@
+{
+  "name": "mac10-coordinator",
+  "version": "1.0.0",
+  "description": "mac10 multi-agent coordinator — deterministic orchestration for Claude Code agents",
+  "main": "src/index.js",
+  "bin": {
+    "mac10": "bin/mac10"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "express": "^4.21.0",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}
