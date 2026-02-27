@@ -5,7 +5,7 @@ const net = require('net');
 const path = require('path');
 const fs = require('fs');
 
-// Find project dir by walking up to find .claude/state/mac10.sock or mac10.pipe
+// Find project dir by walking up to find socket reference
 function findSocketPath() {
   // Check MAC10_SOCKET env first
   if (process.env.MAC10_SOCKET) return process.env.MAC10_SOCKET;
@@ -17,7 +17,12 @@ function findSocketPath() {
     if (fs.existsSync(pipeFile)) {
       return fs.readFileSync(pipeFile, 'utf8').trim();
     }
-    // On Unix, check for socket file
+    // Check for redirected socket path (WSL2/NTFS workaround)
+    const sockPathFile = path.join(dir, '.claude', 'state', 'mac10.sock.path');
+    if (fs.existsSync(sockPathFile)) {
+      return fs.readFileSync(sockPathFile, 'utf8').trim();
+    }
+    // On Unix, check for socket file directly
     const sock = path.join(dir, '.claude', 'state', 'mac10.sock');
     if (fs.existsSync(sock)) return sock;
     dir = path.dirname(dir);
@@ -266,6 +271,73 @@ async function main() {
         break;
       }
 
+      // ALLOCATOR
+      case 'ready-tasks':
+        result = await send(socketPath, 'ready-tasks', {});
+        if (result.ok) {
+          if (result.tasks.length === 0) {
+            console.log('No ready tasks.');
+          } else {
+            for (const t of result.tasks) {
+              console.log(`  #${t.id} [${t.priority}] ${t.subject} ${t.domain ? `[${t.domain}]` : ''}`);
+            }
+          }
+        } else console.error(result.error);
+        break;
+
+      case 'assign-task':
+        result = await send(socketPath, 'assign-task', {
+          task_id: parseInt(argv[1]),
+          worker_id: parseInt(argv[2]),
+        });
+        if (result.ok) console.log(`Task ${result.task_id} assigned to worker-${result.worker_id}.`);
+        else console.error(result.error);
+        break;
+
+      case 'claim-worker':
+        result = await send(socketPath, 'claim-worker', {
+          worker_id: parseInt(argv[1]),
+          claimer: argv[2] || 'architect',
+        });
+        if (result.ok) {
+          if (result.claimed) console.log(`Worker ${argv[1]} claimed.`);
+          else console.log(`Worker ${argv[1]} not available (busy or already claimed).`);
+        } else console.error(result.error);
+        break;
+
+      case 'release-worker':
+        result = await send(socketPath, 'release-worker', {
+          worker_id: parseInt(argv[1]),
+        });
+        if (result.ok) console.log(`Worker ${argv[1]} released.`);
+        else console.error(result.error);
+        break;
+
+      case 'worker-status':
+        result = await send(socketPath, 'worker-status', {});
+        if (result.ok) {
+          if (result.workers.length === 0) {
+            console.log('No workers registered.');
+          } else {
+            for (const w of result.workers) {
+              const task = w.current_task_id ? ` task:${w.current_task_id}` : '';
+              const dom = w.domain ? ` [${w.domain}]` : '';
+              const claim = w.claimed_by ? ` claimed:${w.claimed_by}` : '';
+              console.log(`  worker-${w.id} [${w.status}]${dom}${task}${claim}`);
+            }
+          }
+        } else console.error(result.error);
+        break;
+
+      case 'check-completion':
+        result = await send(socketPath, 'check-completion', {
+          request_id: argv[1],
+        });
+        if (result.ok) {
+          console.log(`Request ${result.request_id}: ${result.completed}/${result.total} completed, ${result.failed} failed${result.all_done ? ' — ALL DONE' : ''}`);
+        } else console.error(result.error);
+        break;
+
       // SYSTEM
       case 'repair':
         result = await send(socketPath, 'repair', {});
@@ -311,6 +383,14 @@ ARCHITECT:
   tier1-complete <request_id> [result]
   ask-clarification <request_id> <question>
   inbox <recipient> [--block] [--peek]
+
+ALLOCATOR:
+  ready-tasks                    List tasks ready for assignment
+  assign-task <task_id> <worker_id>  Assign task to worker (atomic)
+  claim-worker <worker_id> [claimer] Claim worker before assignment
+  release-worker <worker_id>     Release a claimed worker
+  worker-status                  Show all workers with claim info
+  check-completion <request_id>  Check if all tasks for request are done
 
 WORKER:
   my-task <worker_id>            Get current assigned task

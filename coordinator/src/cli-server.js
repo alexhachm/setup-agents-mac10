@@ -31,6 +31,12 @@ const COMMAND_SCHEMAS = {
   'distill':           { required: ['worker_id'], types: { worker_id: 'string' } },
   'inbox':             { required: ['recipient'], types: { recipient: 'string' } },
   'inbox-block':       { required: ['recipient'], types: { recipient: 'string', timeout: 'number' } },
+  'ready-tasks':       { required: [], types: {} },
+  'assign-task':       { required: ['task_id', 'worker_id'], types: { task_id: 'number', worker_id: 'number' } },
+  'claim-worker':      { required: ['worker_id', 'claimer'], types: { worker_id: 'number', claimer: 'string' } },
+  'release-worker':    { required: ['worker_id'], types: { worker_id: 'number' } },
+  'worker-status':     { required: [], types: {} },
+  'check-completion':  { required: ['request_id'], types: { request_id: 'string' } },
   'repair':            { required: [], types: {} },
   'ping':              { required: [], types: {} },
 };
@@ -69,15 +75,19 @@ function getSocketPath(projectDir) {
   fs.mkdirSync(dir, { recursive: true });
   if (process.platform === 'win32') {
     // Windows: use named pipes (Unix sockets have limited support)
-    // Create a deterministic pipe name from project dir
     const crypto = require('crypto');
     const hash = crypto.createHash('md5').update(projectDir).digest('hex').slice(0, 12);
-    // Also write the pipe path to a file so CLI can find it
     const pipePath = `\\\\.\\pipe\\mac10-${hash}`;
     fs.writeFileSync(path.join(dir, 'mac10.pipe'), pipePath, 'utf8');
     return pipePath;
   }
-  return path.join(dir, 'mac10.sock');
+  // On WSL2, /mnt/c/ (NTFS) doesn't support Unix sockets — use /tmp/ instead
+  const crypto = require('crypto');
+  const hash = crypto.createHash('md5').update(projectDir).digest('hex').slice(0, 12);
+  const sockPath = `/tmp/mac10-${hash}.sock`;
+  // Write the socket path so the CLI can find it
+  fs.writeFileSync(path.join(dir, 'mac10.sock.path'), sockPath, 'utf8');
+  return sockPath;
 }
 
 function start(projectDir, handlers) {
@@ -185,6 +195,9 @@ function handleCommand(cmd, conn, handlers) {
         const { request_id, tier, reasoning } = args;
         db.updateRequest(request_id, { tier, status: tier === 1 ? 'executing_tier1' : 'decomposed' });
         db.log('architect', 'triage', { request_id, tier, reasoning });
+        if (tier === 3) {
+          db.sendMail('allocator', 'tasks_ready', { request_id });
+        }
         respond(conn, { ok: true });
         break;
       }
@@ -205,7 +218,7 @@ function handleCommand(cmd, conn, handlers) {
         break;
       }
       case 'ask-clarification': {
-        db.sendMail('user', 'clarification_ask', {
+        db.sendMail('master-1', 'clarification_ask', {
           request_id: args.request_id,
           question: args.question,
         });
@@ -262,7 +275,7 @@ function handleCommand(cmd, conn, handlers) {
             priority: task.priority === 'urgent' ? 10 : 0,
           });
         }
-        db.sendMail('coordinator', 'task_completed', { worker_id, task_id, pr_url });
+        db.sendMail('allocator', 'task_completed', { worker_id, task_id, pr_url });
         db.log(`worker-${worker_id}`, 'task_completed', { task_id, pr_url, result });
         // Notify handlers for merge check
         if (handlers.onTaskCompleted) handlers.onTaskCompleted(task_id);
@@ -293,6 +306,78 @@ function handleCommand(cmd, conn, handlers) {
         // Blocking inbox check (used by sentinel/architect loops)
         const msgs = db.checkMailBlocking(args.recipient, args.timeout || 300000);
         respond(conn, { ok: true, messages: msgs });
+        break;
+      }
+
+      // === ALLOCATOR commands ===
+      case 'ready-tasks': {
+        const tasks = db.getReadyTasks();
+        respond(conn, { ok: true, tasks });
+        break;
+      }
+      case 'assign-task': {
+        const { task_id: assignTaskId, worker_id: assignWorkerId } = args;
+        // Atomic assignment: same pattern as allocator.js assignTaskToWorker
+        const assignResult = db.getDb().transaction(() => {
+          const freshTask = db.getTask(assignTaskId);
+          const freshWorker = db.getWorker(assignWorkerId);
+          if (!freshTask || freshTask.status !== 'ready' || freshTask.assigned_to) return { ok: false, reason: 'task_not_ready' };
+          if (!freshWorker || freshWorker.status !== 'idle') return { ok: false, reason: 'worker_not_idle' };
+
+          db.updateTask(assignTaskId, { status: 'assigned', assigned_to: assignWorkerId });
+          db.updateWorker(assignWorkerId, {
+            status: 'assigned',
+            current_task_id: assignTaskId,
+            domain: freshTask.domain || freshWorker.domain,
+            claimed_by: null,
+            launched_at: new Date().toISOString(),
+          });
+          return { ok: true, task: freshTask, worker: freshWorker };
+        })();
+
+        if (!assignResult.ok) {
+          respond(conn, { ok: false, error: assignResult.reason });
+          break;
+        }
+
+        // Send mail to worker
+        const assignedTask = db.getTask(assignTaskId);
+        db.sendMail(`worker-${assignWorkerId}`, 'task_assigned', {
+          task_id: assignTaskId,
+          subject: assignedTask.subject,
+          description: assignedTask.description,
+          domain: assignedTask.domain,
+          files: assignedTask.files,
+          tier: assignedTask.tier,
+          request_id: assignedTask.request_id,
+          validation: assignedTask.validation,
+        });
+        db.log('allocator', 'task_assigned', { task_id: assignTaskId, worker_id: assignWorkerId, domain: assignedTask.domain });
+
+        // Trigger tmux spawn via handler
+        if (handlers.onAssignTask) handlers.onAssignTask(assignedTask, db.getWorker(assignWorkerId));
+
+        respond(conn, { ok: true, task_id: assignTaskId, worker_id: assignWorkerId });
+        break;
+      }
+      case 'claim-worker': {
+        const success = db.claimWorker(args.worker_id, args.claimer);
+        respond(conn, { ok: true, claimed: success });
+        break;
+      }
+      case 'release-worker': {
+        db.releaseWorker(args.worker_id);
+        respond(conn, { ok: true });
+        break;
+      }
+      case 'worker-status': {
+        const workers = db.getAllWorkers();
+        respond(conn, { ok: true, workers });
+        break;
+      }
+      case 'check-completion': {
+        const completion = db.checkRequestCompletion(args.request_id);
+        respond(conn, { ok: true, ...completion });
         break;
       }
 

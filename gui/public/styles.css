@@ -250,6 +250,67 @@ h2 {
   margin: 0;
 }
 
+/* Masters panel */
+#masters-panel { margin-bottom: 24px; }
+
+.masters-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.master-card {
+  padding: 12px;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.master-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #c9d1d9;
+}
+
+.master-model {
+  font-size: 11px;
+  font-weight: 400;
+  color: #8b949e;
+  background: #21262d;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 4px;
+}
+
+.master-role {
+  font-size: 12px;
+  color: #8b949e;
+  margin: 4px 0 8px;
+}
+
+.master-status {
+  display: block;
+  font-size: 11px;
+  min-height: 16px;
+  margin-bottom: 8px;
+}
+
+.master-btn {
+  padding: 6px 16px;
+  background: #1c2d3f;
+  color: #58a6ff;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  width: 100%;
+}
+
+.master-btn:hover { background: #1f3a5f; border-color: #58a6ff; }
+.master-btn:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+
 /* Git panel */
 #git-panel { margin-bottom: 24px; }
 
@@ -315,6 +376,7 @@ h2 {
 
 @media (max-width: 900px) {
   .grid { grid-template-columns: 1fr; }
+  .masters-grid { grid-template-columns: 1fr; }
   .setup-field input[type="text"] { min-width: unset; width: 100%; }
   #setup-form { flex-direction: column; align-items: stretch; }
 }

@@ -10,7 +10,7 @@ const webServer = require('./web-server');
 const tmux = require('./tmux');
 
 const projectDir = process.argv[2] || process.cwd();
-const scriptDir = path.resolve(__dirname, '..', '..');
+const scriptDir = process.env.MAC10_SCRIPT_DIR || path.resolve(__dirname, '..', '..');
 
 console.log(`mac10 coordinator starting for: ${projectDir}`);
 
@@ -25,6 +25,18 @@ console.log(`tmux session "${tmux.SESSION}" ready.`);
 // Start CLI server (Unix socket for mac10 commands)
 const handlers = {
   onTaskCompleted: (taskId) => merger.onTaskCompleted(taskId),
+  onAssignTask: (task, worker) => {
+    const windowName = `worker-${worker.id}`;
+    if (tmux.hasWindow(windowName)) return;
+    const sentinelPath = path.join(projectDir, '.claude', 'scripts', 'worker-sentinel.sh');
+    const worktreePath = worker.worktree_path || path.join(projectDir, '.worktrees', `wt-${worker.id}`);
+    tmux.createWindow(windowName, `bash "${sentinelPath}" ${worker.id} "${projectDir}"`, worktreePath);
+    db.updateWorker(worker.id, {
+      tmux_session: tmux.SESSION,
+      tmux_window: windowName,
+    });
+    db.log('coordinator', 'worker_spawned', { worker_id: worker.id, window: windowName });
+  },
 };
 cliServer.start(projectDir, handlers);
 console.log('CLI server listening.');

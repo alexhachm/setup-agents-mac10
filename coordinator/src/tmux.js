@@ -21,11 +21,19 @@ function ensureSession() {
   }
 }
 
-function createWindow(name, cmd, cwd) {
+function createWindow(name, cmd, cwd, envVars) {
   ensureSession();
   const cwdFlag = cwd ? `-c "${cwd}"` : '';
   exec(`tmux new-window -t ${SESSION} -n "${name}" ${cwdFlag}`);
   if (cmd) {
+    // Set environment variables in the pane before running the command
+    // Uses execFileSync (array args) to avoid shell interpolation of values
+    if (envVars && typeof envVars === 'object') {
+      for (const [k, v] of Object.entries(envVars)) {
+        execFileSync('tmux', ['set-environment', '-t', SESSION, k, v], { encoding: 'utf8', timeout: 10000 });
+        execFileSync('tmux', ['send-keys', '-t', `${SESSION}:${name}`, `export ${k}=${JSON.stringify(v)}`, 'Enter'], { encoding: 'utf8', timeout: 10000 });
+      }
+    }
     exec(`tmux send-keys -t ${SESSION}:${name} "${cmd}" Enter`);
   }
 }

@@ -135,23 +135,23 @@ describe('CLI Server', () => {
     db.updateWorker(1, { status: 'assigned', current_task_id: taskId });
 
     // Get task
-    let result = await sendCommand('my-task', { worker_id: 1 });
+    let result = await sendCommand('my-task', { worker_id: '1' });
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.task.id, taskId);
 
     // Start task
-    result = await sendCommand('start-task', { worker_id: 1, task_id: taskId });
+    result = await sendCommand('start-task', { worker_id: '1', task_id: String(taskId) });
     assert.strictEqual(result.ok, true);
     assert.strictEqual(db.getTask(taskId).status, 'in_progress');
 
     // Heartbeat
-    result = await sendCommand('heartbeat', { worker_id: 1 });
+    result = await sendCommand('heartbeat', { worker_id: '1' });
     assert.strictEqual(result.ok, true);
 
     // Complete task
     result = await sendCommand('complete-task', {
-      worker_id: 1,
-      task_id: taskId,
+      worker_id: '1',
+      task_id: String(taskId),
       pr_url: 'https://github.com/org/repo/pull/42',
       branch: 'agent-1',
       result: 'Added the endpoint',

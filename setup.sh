@@ -266,25 +266,45 @@ if [ "$ALREADY_RUNNING" = false ]; then
   fi
 fi
 
-# --- Launch architect terminal ---
+# --- Launch all 3 masters ---
 
-echo "Launching architect terminal..."
+echo "Launching master agents..."
 
-# Open a Windows Terminal tab with the architect loop
 WT_EXE="/mnt/c/Users/$USER/AppData/Local/Microsoft/WindowsApps/wt.exe"
 if [ -f "$WT_EXE" ]; then
   WIN_PROJECT=$(echo "$PROJECT_DIR" | sed 's|^/mnt/\(.\)/|\U\1:\\|; s|/|\\|g')
-  "$WT_EXE" -w 0 new-tab --title "Architect" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash -c "cd '$PROJECT_DIR' && claude --model opus /architect-loop; exec bash" &
-  echo "  Architect terminal opened."
+
+  # Master-1 (Interface) — Sonnet
+  "$WT_EXE" -w 0 new-tab --title "Master-1 (Interface)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash -c "cd '$PROJECT_DIR' && claude --model sonnet /master-loop; exec bash" &
+  echo "  Master-1 (Interface/Sonnet) terminal opened."
+
+  sleep 1
+
+  # Master-2 (Architect) — Opus
+  "$WT_EXE" -w 0 new-tab --title "Master-2 (Architect)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash -c "cd '$PROJECT_DIR' && claude --model opus /architect-loop; exec bash" &
+  echo "  Master-2 (Architect/Opus) terminal opened."
+
+  sleep 1
+
+  # Master-3 (Allocator) — Sonnet
+  "$WT_EXE" -w 0 new-tab --title "Master-3 (Allocator)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash -c "cd '$PROJECT_DIR' && claude --model sonnet /allocate-loop; exec bash" &
+  echo "  Master-3 (Allocator/Sonnet) terminal opened."
 else
   echo "  Windows Terminal not found — start manually:"
+  echo "    cd $PROJECT_DIR && claude --model sonnet /master-loop"
   echo "    cd $PROJECT_DIR && claude --model opus /architect-loop"
+  echo "    cd $PROJECT_DIR && claude --model sonnet /allocate-loop"
 fi
 
 echo ""
 echo "========================================"
 echo " mac10 Setup Complete!"
 echo "========================================"
+echo ""
+echo "3 Masters launched:"
+echo "  Master-1 (Interface/Sonnet)  — user's contact point"
+echo "  Master-2 (Architect/Opus)    — triage & decomposition"
+echo "  Master-3 (Allocator/Sonnet)  — task-worker matching"
 echo ""
 echo "Dashboard:    http://localhost:3100"
 echo "Submit work:  mac10 request \"Add user authentication\""

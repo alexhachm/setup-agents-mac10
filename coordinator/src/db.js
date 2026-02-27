@@ -10,7 +10,7 @@ let db = null;
 const VALID_COLUMNS = Object.freeze({
   requests: new Set(['description', 'tier', 'status', 'result', 'completed_at']),
   tasks: new Set(['request_id', 'subject', 'description', 'domain', 'files', 'priority', 'tier', 'depends_on', 'assigned_to', 'status', 'pr_url', 'branch', 'validation', 'started_at', 'completed_at', 'result']),
-  workers: new Set(['status', 'domain', 'worktree_path', 'branch', 'tmux_session', 'tmux_window', 'pid', 'current_task_id', 'last_heartbeat', 'launched_at', 'tasks_completed']),
+  workers: new Set(['status', 'domain', 'worktree_path', 'branch', 'tmux_session', 'tmux_window', 'pid', 'current_task_id', 'claimed_by', 'last_heartbeat', 'launched_at', 'tasks_completed']),
   merge_queue: new Set(['status', 'priority', 'merged_at', 'error']),
 });
 
@@ -61,6 +61,7 @@ function createRequest(description) {
     INSERT INTO requests (id, description) VALUES (?, ?)
   `).run(id, description);
   sendMail('architect', 'new_request', { request_id: id, description });
+  sendMail('master-1', 'request_acknowledged', { request_id: id, description });
   log('user', 'request_created', { request_id: id, description });
   return id;
 }
@@ -193,6 +194,36 @@ function getAllWorkers() {
   return getDb().prepare('SELECT * FROM workers ORDER BY id').all();
 }
 
+function claimWorker(workerId, claimer) {
+  const result = getDb().prepare(
+    "UPDATE workers SET claimed_by = ? WHERE id = ? AND status = 'idle' AND claimed_by IS NULL"
+  ).run(claimer, workerId);
+  return result.changes > 0;
+}
+
+function releaseWorker(workerId) {
+  getDb().prepare('UPDATE workers SET claimed_by = NULL WHERE id = ?').run(workerId);
+}
+
+function checkRequestCompletion(requestId) {
+  const total = getDb().prepare(
+    'SELECT COUNT(*) as cnt FROM tasks WHERE request_id = ?'
+  ).get(requestId);
+  const done = getDb().prepare(
+    "SELECT COUNT(*) as cnt FROM tasks WHERE request_id = ? AND status = 'completed'"
+  ).get(requestId);
+  const failed = getDb().prepare(
+    "SELECT COUNT(*) as cnt FROM tasks WHERE request_id = ? AND status = 'failed'"
+  ).get(requestId);
+  return {
+    request_id: requestId,
+    total: total.cnt,
+    completed: done.cnt,
+    failed: failed.cnt,
+    all_done: done.cnt + failed.cnt >= total.cnt && total.cnt > 0,
+  };
+}
+
 // --- Mail helpers ---
 
 function sendMail(recipient, type, payload = {}) {
@@ -286,7 +317,7 @@ module.exports = {
   init, close, getDb,
   createRequest, getRequest, updateRequest, listRequests,
   createTask, getTask, updateTask, listTasks, getReadyTasks, checkAndPromoteTasks,
-  registerWorker, getWorker, updateWorker, getIdleWorkers, getAllWorkers,
+  registerWorker, getWorker, updateWorker, getIdleWorkers, getAllWorkers, claimWorker, releaseWorker, checkRequestCompletion,
   sendMail, checkMail, checkMailBlocking,
   enqueueMerge, getNextMerge, updateMerge,
   log, getLog,

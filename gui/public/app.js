@@ -271,33 +271,45 @@
     btn.innerHTML = body.classList.contains('collapsed') ? '&#9654;' : '&#9660;';
   });
 
-  // --- Architect launch ---
+  // --- Master launch helpers ---
 
-  document.getElementById('architect-btn').addEventListener('click', () => {
-    const btn = document.getElementById('architect-btn');
-    const status = document.getElementById('architect-status');
+  function launchMaster(btnId, statusId, endpoint) {
+    const btn = document.getElementById(btnId);
+    const status = document.getElementById(statusId);
     btn.disabled = true;
     btn.textContent = 'Launching...';
 
-    fetch('/api/architect/launch', { method: 'POST' })
+    fetch(endpoint, { method: 'POST' })
       .then(r => r.json())
       .then(data => {
         if (data.ok) {
           status.textContent = 'Terminal opened';
-          status.style.cssText = 'background:#1c3a2a;color:#3fb950';
-          btn.textContent = 'Launch Architect Terminal';
+          status.style.cssText = 'color:#3fb950';
+          btn.textContent = 'Launch';
           btn.disabled = false;
         } else {
           status.textContent = data.error || 'Failed';
-          status.style.cssText = 'background:#3d2b1f;color:#d29922';
-          btn.textContent = 'Launch Architect Terminal';
+          status.style.cssText = 'color:#d29922';
+          btn.textContent = 'Launch';
           btn.disabled = false;
         }
       })
       .catch(() => {
-        btn.textContent = 'Launch Architect Terminal';
+        btn.textContent = 'Launch';
         btn.disabled = false;
       });
+  }
+
+  document.getElementById('master1-btn').addEventListener('click', () => {
+    launchMaster('master1-btn', 'master1-status', '/api/master1/launch');
+  });
+
+  document.getElementById('architect-btn').addEventListener('click', () => {
+    launchMaster('architect-btn', 'architect-status', '/api/architect/launch');
+  });
+
+  document.getElementById('master3-btn').addEventListener('click', () => {
+    launchMaster('master3-btn', 'master3-status', '/api/master3/launch');
   });
 
   // --- Git push ---

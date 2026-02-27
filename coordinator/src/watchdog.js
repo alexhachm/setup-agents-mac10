@@ -75,6 +75,9 @@ function tick(projectDir) {
     }
   }
 
+  // Stale claim cleanup: workers claimed but no task assigned for >2 minutes
+  releaseStaleClaimsCheck(now);
+
   // Orphan task recovery: tasks assigned but worker is idle
   recoverOrphanTasks();
 }
@@ -150,6 +153,27 @@ function handleDeath(worker, reason) {
     current_task_id: null,
     pid: null,
   });
+}
+
+function releaseStaleClaimsCheck(now) {
+  const claimedWorkers = db.getDb().prepare(
+    "SELECT * FROM workers WHERE claimed_by IS NOT NULL AND status = 'idle' AND current_task_id IS NULL"
+  ).all();
+
+  for (const worker of claimedWorkers) {
+    // Use last_heartbeat or created_at as claim timestamp proxy
+    const claimTime = worker.last_heartbeat || worker.created_at;
+    if (!claimTime) {
+      db.releaseWorker(worker.id);
+      db.log('coordinator', 'stale_claim_released', { worker_id: worker.id, reason: 'no_timestamp' });
+      continue;
+    }
+    const staleSec = (now - new Date(claimTime).getTime()) / 1000;
+    if (staleSec > 120) {
+      db.releaseWorker(worker.id);
+      db.log('coordinator', 'stale_claim_released', { worker_id: worker.id, stale_sec: staleSec });
+    }
+  }
 }
 
 function recoverOrphanTasks() {

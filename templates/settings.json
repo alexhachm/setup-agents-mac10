@@ -38,7 +38,10 @@
       "Skill(commit-push-pr)",
       "Skill(worker-loop)",
       "Skill(architect-loop)",
-      "Skill(scan-codebase)"
+      "Skill(scan-codebase)",
+      "Skill(master-loop)",
+      "Skill(allocate-loop)",
+      "Skill(scan-codebase-allocator)"
     ],
     "deny": []
   },

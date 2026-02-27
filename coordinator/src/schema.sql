@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS workers (
   tmux_window TEXT,
   pid INTEGER,
   current_task_id INTEGER REFERENCES tasks(id),
+  claimed_by TEXT,  -- 'architect' or NULL; prevents allocator race
   last_heartbeat TEXT,
   launched_at TEXT,
   tasks_completed INTEGER NOT NULL DEFAULT 0,
