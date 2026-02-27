@@ -24,16 +24,21 @@ Read context files if they exist:
 - `.claude/knowledge/allocation-learnings.md`
 - `.claude/knowledge/domain/` (all files)
 
-Check current state:
+Check current system state (catches work in-flight from before a reset):
+
 ```bash
 mac10 status
 mac10 worker-status
+mac10 ready-tasks
 ```
+
+Review the output: if there are ready tasks AND idle workers, assign them immediately before entering the main loop — process them as if you just received a `tasks_available` message.
 
 Print a startup banner:
 ```
 === Master-3 (Allocator) ready ===
 Workers: [list idle/busy counts]
+Ready tasks: [count]
 Waiting for task notifications...
 ```
 

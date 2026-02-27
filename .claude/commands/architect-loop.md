@@ -24,6 +24,14 @@ Read context files if they exist:
 - `.claude/knowledge/mistakes.md`
 - `.claude/knowledge/instruction-patches.md` — apply any patches targeting "architect", then clear applied entries
 
+Check current system state (catches work in-flight from before a reset):
+
+```bash
+mac10 status
+```
+
+Review the output: if any requests have `status: pending` or `status: triaging`, they need your attention. Process them before entering the main loop — triage each one as if you just received a `new_request` message.
+
 ## The Loop
 
 ### Step 1: Wait for Messages
