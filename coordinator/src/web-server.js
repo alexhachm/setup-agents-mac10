@@ -204,9 +204,15 @@ function start(projectDir, port = 3100, scriptDir = null) {
     res.json({ ok: true, message: 'Setup started' });
   });
 
-  // --- Architect launch endpoint ---
+  // --- Agent launch helper ---
+  // Uses launch-agent.sh wrapper to avoid semicolons in WT command line
+  // (Windows Terminal treats `;` as its own command separator)
 
-  app.post('/api/architect/launch', (req, res) => {
+  const launchScript = path.join(resolvedScriptDir, 'scripts', 'launch-agent.sh');
+  const isWSL = fs.existsSync('/proc/version') &&
+    (() => { try { return fs.readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft'); } catch { return false; } })();
+
+  function launchAgent(title, windowName, model, slashCmd, logTag, res) {
     const repoDir = db.getConfig('project_dir') || projectDir;
     if (!repoDir) {
       return res.status(400).json({ ok: false, error: 'No project directory configured' });
@@ -218,135 +224,52 @@ function start(projectDir, port = 3100, scriptDir = null) {
       return res.status(400).json({ ok: false, error: 'Project directory does not exist' });
     }
 
-    // Detect WSL and open Windows Terminal tab
-    const isWSL = fs.existsSync('/proc/version') &&
-      fs.readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft');
-
     if (isWSL) {
       const user = process.env.USER || process.env.LOGNAME || 'owner';
       const wt = `/mnt/c/Users/${user}/AppData/Local/Microsoft/WindowsApps/wt.exe`;
       const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
 
-      // Pass repoDir via env var to avoid shell interpolation
       const proc = spawn(wt, [
-        '-w', '0', 'new-tab', '--title', 'Architect', '--',
-        'wsl.exe', '-d', distro, '--', 'bash', '-c',
-        'cd "$MAC10_REPO_DIR" && claude --model opus /architect-loop; exec bash'
+        '-w', '0', 'new-tab', '--title', title, '--',
+        'wsl.exe', '-d', distro, '--',
+        'bash', launchScript, repoDir, model, slashCmd
       ], {
         stdio: 'ignore',
         detached: true,
-        env: { ...process.env, MAC10_REPO_DIR: repoDir },
       });
       proc.unref();
 
-      db.log('gui', 'architect_launched', { projectDir: repoDir });
-      return res.json({ ok: true, message: 'Architect terminal opened' });
+      db.log('gui', logTag, { projectDir: repoDir });
+      return res.json({ ok: true, message: `${title} terminal opened` });
     }
 
     // macOS / Linux: open in tmux
     const tmux = require('./tmux');
     try {
-      // Pass repoDir via env var to avoid shell interpolation
-      tmux.createWindow('architect', 'cd "$MAC10_REPO_DIR" && claude --model opus /architect-loop', repoDir, { MAC10_REPO_DIR: repoDir });
-      db.log('gui', 'architect_launched', { projectDir: repoDir, method: 'tmux' });
-      return res.json({ ok: true, message: 'Architect launched in tmux window "architect"' });
+      tmux.createWindow(windowName, `bash "${launchScript}" "${repoDir}" ${model} ${slashCmd}`, repoDir);
+      db.log('gui', logTag, { projectDir: repoDir, method: 'tmux' });
+      return res.json({ ok: true, message: `${title} launched in tmux window "${windowName}"` });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
     }
+  }
+
+  // --- Architect (Master-2) launch endpoint ---
+
+  app.post('/api/architect/launch', (req, res) => {
+    launchAgent('Master-2 (Architect)', 'architect', 'opus', '/architect-loop', 'architect_launched', res);
   });
 
   // --- Master-1 (Interface) launch endpoint ---
 
   app.post('/api/master1/launch', (req, res) => {
-    const repoDir = db.getConfig('project_dir') || projectDir;
-    if (!repoDir) {
-      return res.status(400).json({ ok: false, error: 'No project directory configured' });
-    }
-    if (!SAFE_PATH_RE.test(repoDir)) {
-      return res.status(400).json({ ok: false, error: 'Invalid project directory path' });
-    }
-    if (!fs.existsSync(repoDir)) {
-      return res.status(400).json({ ok: false, error: 'Project directory does not exist' });
-    }
-
-    const isWSL = fs.existsSync('/proc/version') &&
-      fs.readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft');
-
-    if (isWSL) {
-      const user = process.env.USER || process.env.LOGNAME || 'owner';
-      const wt = `/mnt/c/Users/${user}/AppData/Local/Microsoft/WindowsApps/wt.exe`;
-      const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
-
-      const proc = spawn(wt, [
-        '-w', '0', 'new-tab', '--title', 'Master-1 (Interface)', '--',
-        'wsl.exe', '-d', distro, '--', 'bash', '-c',
-        'cd "$MAC10_REPO_DIR" && claude --model sonnet /master-loop; exec bash'
-      ], {
-        stdio: 'ignore',
-        detached: true,
-        env: { ...process.env, MAC10_REPO_DIR: repoDir },
-      });
-      proc.unref();
-
-      db.log('gui', 'master1_launched', { projectDir: repoDir });
-      return res.json({ ok: true, message: 'Master-1 (Interface) terminal opened' });
-    }
-
-    const tmux = require('./tmux');
-    try {
-      tmux.createWindow('master-1', 'cd "$MAC10_REPO_DIR" && claude --model sonnet /master-loop', repoDir, { MAC10_REPO_DIR: repoDir });
-      db.log('gui', 'master1_launched', { projectDir: repoDir, method: 'tmux' });
-      return res.json({ ok: true, message: 'Master-1 launched in tmux window "master-1"' });
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: e.message });
-    }
+    launchAgent('Master-1 (Interface)', 'master-1', 'sonnet', '/master-loop', 'master1_launched', res);
   });
 
   // --- Master-3 (Allocator) launch endpoint ---
 
   app.post('/api/master3/launch', (req, res) => {
-    const repoDir = db.getConfig('project_dir') || projectDir;
-    if (!repoDir) {
-      return res.status(400).json({ ok: false, error: 'No project directory configured' });
-    }
-    if (!SAFE_PATH_RE.test(repoDir)) {
-      return res.status(400).json({ ok: false, error: 'Invalid project directory path' });
-    }
-    if (!fs.existsSync(repoDir)) {
-      return res.status(400).json({ ok: false, error: 'Project directory does not exist' });
-    }
-
-    const isWSL = fs.existsSync('/proc/version') &&
-      fs.readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft');
-
-    if (isWSL) {
-      const user = process.env.USER || process.env.LOGNAME || 'owner';
-      const wt = `/mnt/c/Users/${user}/AppData/Local/Microsoft/WindowsApps/wt.exe`;
-      const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
-
-      const proc = spawn(wt, [
-        '-w', '0', 'new-tab', '--title', 'Master-3 (Allocator)', '--',
-        'wsl.exe', '-d', distro, '--', 'bash', '-c',
-        'cd "$MAC10_REPO_DIR" && claude --model sonnet /allocate-loop; exec bash'
-      ], {
-        stdio: 'ignore',
-        detached: true,
-        env: { ...process.env, MAC10_REPO_DIR: repoDir },
-      });
-      proc.unref();
-
-      db.log('gui', 'master3_launched', { projectDir: repoDir });
-      return res.json({ ok: true, message: 'Master-3 (Allocator) terminal opened' });
-    }
-
-    const tmux = require('./tmux');
-    try {
-      tmux.createWindow('master-3', 'cd "$MAC10_REPO_DIR" && claude --model sonnet /allocate-loop', repoDir, { MAC10_REPO_DIR: repoDir });
-      db.log('gui', 'master3_launched', { projectDir: repoDir, method: 'tmux' });
-      return res.json({ ok: true, message: 'Master-3 launched in tmux window "master-3"' });
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: e.message });
-    }
+    launchAgent('Master-3 (Allocator)', 'master-3', 'sonnet', '/allocate-loop', 'master3_launched', res);
   });
 
   // --- Git push endpoint ---

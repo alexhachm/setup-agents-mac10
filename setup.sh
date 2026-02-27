@@ -270,24 +270,23 @@ fi
 
 echo "Launching master agents..."
 
+LAUNCH_SCRIPT="$SCRIPT_DIR/scripts/launch-agent.sh"
 WT_EXE="/mnt/c/Users/$USER/AppData/Local/Microsoft/WindowsApps/wt.exe"
 if [ -f "$WT_EXE" ]; then
-  WIN_PROJECT=$(echo "$PROJECT_DIR" | sed 's|^/mnt/\(.\)/|\U\1:\\|; s|/|\\|g')
-
   # Master-1 (Interface) — Sonnet
-  "$WT_EXE" -w 0 new-tab --title "Master-1 (Interface)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash -c "cd '$PROJECT_DIR' && claude --model sonnet /master-loop; exec bash" &
+  "$WT_EXE" -w 0 new-tab --title "Master-1 (Interface)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash "$LAUNCH_SCRIPT" "$PROJECT_DIR" sonnet /master-loop &
   echo "  Master-1 (Interface/Sonnet) terminal opened."
 
   sleep 1
 
   # Master-2 (Architect) — Opus
-  "$WT_EXE" -w 0 new-tab --title "Master-2 (Architect)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash -c "cd '$PROJECT_DIR' && claude --model opus /architect-loop; exec bash" &
+  "$WT_EXE" -w 0 new-tab --title "Master-2 (Architect)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash "$LAUNCH_SCRIPT" "$PROJECT_DIR" opus /architect-loop &
   echo "  Master-2 (Architect/Opus) terminal opened."
 
   sleep 1
 
   # Master-3 (Allocator) — Sonnet
-  "$WT_EXE" -w 0 new-tab --title "Master-3 (Allocator)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash -c "cd '$PROJECT_DIR' && claude --model sonnet /allocate-loop; exec bash" &
+  "$WT_EXE" -w 0 new-tab --title "Master-3 (Allocator)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash "$LAUNCH_SCRIPT" "$PROJECT_DIR" sonnet /allocate-loop &
   echo "  Master-3 (Allocator/Sonnet) terminal opened."
 else
   echo "  Windows Terminal not found — start manually:"
