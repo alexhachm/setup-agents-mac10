@@ -8,7 +8,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const db = require('./db');
 
-const REPO_RE = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
+const REPO_RE = /^(https?:\/\/github\.com\/)?[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+(\.git)?$/;
 const SAFE_PATH_RE = /^\/[a-zA-Z0-9._\/ -]+$/;
 
 let server = null;
@@ -112,6 +112,32 @@ function start(projectDir, port = 3100, scriptDir = null) {
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Save config without running full setup
+  app.post('/api/config', (req, res) => {
+    try {
+      const { projectDir: newDir, githubRepo, numWorkers } = req.body;
+      if (newDir) {
+        if (!SAFE_PATH_RE.test(newDir)) {
+          return res.status(400).json({ ok: false, error: 'Invalid project directory path' });
+        }
+        db.setConfig('project_dir', newDir);
+      }
+      if (githubRepo !== undefined) {
+        if (githubRepo && !REPO_RE.test(githubRepo)) {
+          return res.status(400).json({ ok: false, error: 'Invalid GitHub repo format. Expected owner/repo.' });
+        }
+        db.setConfig('github_repo', githubRepo);
+      }
+      if (numWorkers !== undefined) {
+        db.setConfig('num_workers', String(Math.min(Math.max(parseInt(numWorkers) || 4, 1), 8)));
+      }
+      db.log('gui', 'config_updated', { projectDir: newDir, githubRepo, numWorkers });
+      res.json({ ok: true, message: 'Config saved. Relaunch masters to apply.' });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
     }
   });
 

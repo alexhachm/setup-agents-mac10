@@ -37,6 +37,7 @@ const COMMAND_SCHEMAS = {
   'release-worker':    { required: ['worker_id'], types: { worker_id: 'number' } },
   'worker-status':     { required: [], types: {} },
   'check-completion':  { required: ['request_id'], types: { request_id: 'string' } },
+  'register-worker':   { required: ['worker_id'], types: { worker_id: 'string', worktree_path: 'string', branch: 'string' } },
   'repair':            { required: [], types: {} },
   'ping':              { required: [], types: {} },
 };
@@ -303,9 +304,29 @@ function handleCommand(cmd, conn, handlers) {
         break;
       }
       case 'inbox-block': {
-        // Blocking inbox check (used by sentinel/architect loops)
-        const msgs = db.checkMailBlocking(args.recipient, args.timeout || 300000);
-        respond(conn, { ok: true, messages: msgs });
+        // Async blocking inbox check — polls without freezing the event loop
+        const recipient = args.recipient;
+        const timeoutMs = args.timeout || 300000;
+        const pollMs = 1000;
+        const deadline = Date.now() + timeoutMs;
+
+        const poll = () => {
+          try {
+            const msgs = db.checkMail(recipient);
+            if (msgs.length > 0) {
+              respond(conn, { ok: true, messages: msgs });
+              return;
+            }
+            if (Date.now() >= deadline) {
+              respond(conn, { ok: true, messages: [] });
+              return;
+            }
+            setTimeout(poll, pollMs);
+          } catch (e) {
+            respond(conn, { error: e.message });
+          }
+        };
+        poll();
         break;
       }
 
@@ -382,6 +403,13 @@ function handleCommand(cmd, conn, handlers) {
       }
 
       // === SYSTEM commands ===
+      case 'register-worker': {
+        const { worker_id, worktree_path, branch } = args;
+        db.registerWorker(worker_id, worktree_path || '', branch || '');
+        db.log('coordinator', 'worker_registered', { worker_id });
+        respond(conn, { ok: true, worker_id });
+        break;
+      }
       case 'repair': {
         // Reset stuck states
         const cutoff = new Date(Date.now() - 3 * 60 * 1000).toISOString();

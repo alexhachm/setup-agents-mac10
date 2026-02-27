@@ -339,6 +339,16 @@ async function main() {
         break;
 
       // SYSTEM
+      case 'register-worker':
+        result = await send(socketPath, 'register-worker', {
+          worker_id: argv[1],
+          worktree_path: argv[2] || '',
+          branch: argv[3] || '',
+        });
+        if (result.ok) console.log(`Worker ${result.worker_id} registered.`);
+        else console.error(result.error);
+        break;
+
       case 'repair':
         result = await send(socketPath, 'repair', {});
         if (result.ok) console.log(`Repaired: ${result.reset_workers} workers, ${result.orphaned_tasks} tasks`);

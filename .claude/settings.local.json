@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(export PATH=\"/mnt/c/Users/Owner/Desktop/setup-agents-mac8/setup-agents-mac10/coordinator/bin:$PATH\" && mac10 status 2>&1)",
+      "Bash(export PATH=\"$PATH:/mnt/c/Users/Owner/Desktop/setup-agents-mac8/setup-agents-mac10/.claude/scripts\" && mac10 status 2>&1)",
+      "Bash(export PATH=\"$PATH:/mnt/c/Users/Owner/Desktop/setup-agents-mac8/setup-agents-mac10/.claude/scripts\" && mac10 inbox master-1 2>&1)"
+    ]
+  }
+}

@@ -9,5 +9,5 @@ MODEL="$2"
 CMD="$3"
 
 cd "$DIR" || exit 1
-claude --model "$MODEL" "$CMD"
+claude --dangerously-skip-permissions --model "$MODEL" "$CMD"
 exec bash

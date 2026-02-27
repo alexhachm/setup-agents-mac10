@@ -34,7 +34,11 @@
             <label for="worker-count">Workers</label>
             <input type="number" id="worker-count" min="1" max="8" value="4" />
           </div>
-          <button id="launch-btn">Launch Setup</button>
+          <div class="setup-buttons">
+            <button id="save-config-btn">Save Config</button>
+            <button id="launch-btn">Launch Full Setup</button>
+          </div>
+          <div id="config-msg" style="display:none"></div>
         </div>
         <div id="setup-output" style="display:none">
           <pre id="setup-log"></pre>

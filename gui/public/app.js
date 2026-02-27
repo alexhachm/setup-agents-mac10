@@ -175,8 +175,8 @@
           statusEl.textContent = 'Setup complete';
           statusEl.className = 'done';
           toggleBtn.style.display = '';
-          toggleBtn.innerHTML = '&#9654;';
-          body.classList.add('collapsed');
+          toggleBtn.innerHTML = '&#9660;';
+          // Keep panel open so user can change config
         } else {
           statusEl.textContent = 'Not configured';
           statusEl.className = 'pending';
@@ -218,6 +218,48 @@
       appendSetupLog('\n--- Setup failed (exit code ' + code + ') ---');
     }
   }
+
+  // Save config without full setup
+  document.getElementById('save-config-btn').addEventListener('click', () => {
+    const projectDir = document.getElementById('project-dir').value.trim();
+    const githubRepo = document.getElementById('github-repo').value.trim();
+    const numWorkers = parseInt(document.getElementById('worker-count').value) || 4;
+    if (!projectDir) {
+      document.getElementById('project-dir').focus();
+      return;
+    }
+    const btn = document.getElementById('save-config-btn');
+    const msg = document.getElementById('config-msg');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectDir, githubRepo, numWorkers }),
+    }).then(r => r.json()).then(data => {
+      btn.disabled = false;
+      btn.textContent = 'Save Config';
+      msg.style.display = '';
+      if (data.ok) {
+        msg.textContent = 'Config saved. Relaunch masters to apply.';
+        msg.style.color = '#3fb950';
+        // Update git panel label
+        document.getElementById('git-repo-label').textContent = githubRepo;
+        if (githubRepo) document.getElementById('git-push-btn').disabled = false;
+      } else {
+        msg.textContent = data.error || 'Save failed';
+        msg.style.color = '#f85149';
+      }
+      setTimeout(() => { msg.style.display = 'none'; }, 5000);
+    }).catch(err => {
+      btn.disabled = false;
+      btn.textContent = 'Save Config';
+      msg.style.display = '';
+      msg.textContent = 'Error: ' + err.message;
+      msg.style.color = '#f85149';
+    });
+  });
 
   // Launch setup button
   document.getElementById('launch-btn').addEventListener('click', () => {

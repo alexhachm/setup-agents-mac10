@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec node "/mnt/c/Users/Owner/Desktop/setup-agents-mac8/setup-agents-mac10/coordinator/bin/mac10" "$@"

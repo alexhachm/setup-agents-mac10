@@ -33,7 +33,7 @@ while true; do
 
     # Launch Claude worker
     echo "[sentinel-$WORKER_ID] Launching claude..."
-    claude --dangerously-skip-permissions --model sonnet "/worker-loop" 2>&1 || true
+    claude --model opus "/worker-loop" 2>&1 || true
 
     echo "[sentinel-$WORKER_ID] Claude exited, resetting status..."
     mac10 heartbeat "$WORKER_ID" 2>/dev/null || true

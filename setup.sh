@@ -98,12 +98,18 @@ mkdir -p "$CLAUDE_DIR/scripts"
 
 echo "[4/8] Copying templates..."
 
-# Commands (slash commands for agents)
-cp "$SCRIPT_DIR/templates/commands/"*.md "$CLAUDE_DIR/commands/"
+# Commands (slash commands for agents) — only copy if not already present
+for f in "$SCRIPT_DIR/templates/commands/"*.md; do
+  dest="$CLAUDE_DIR/commands/$(basename "$f")"
+  [ -f "$dest" ] || cp "$f" "$dest"
+done
 
-# Agent templates
+# Agent templates — only copy if not already present
 mkdir -p "$CLAUDE_DIR/agents"
-cp "$SCRIPT_DIR/templates/agents/"*.md "$CLAUDE_DIR/agents/"
+for f in "$SCRIPT_DIR/templates/agents/"*.md; do
+  dest="$CLAUDE_DIR/agents/$(basename "$f")"
+  [ -f "$dest" ] || cp "$f" "$dest"
+done
 
 # Knowledge templates (don't overwrite existing)
 for f in "$SCRIPT_DIR/templates/knowledge/"*.md; do
@@ -115,8 +121,12 @@ done
 mkdir -p "$CLAUDE_DIR/docs"
 cp "$SCRIPT_DIR/templates/docs/"*.md "$CLAUDE_DIR/docs/"
 
-# CLAUDE.md for architect (root)
-cp "$SCRIPT_DIR/templates/root-claude.md" "$PROJECT_DIR/CLAUDE.md"
+# CLAUDE.md for architect (root) — only if not already present
+if [ ! -f "$PROJECT_DIR/CLAUDE.md" ]; then
+  cp "$SCRIPT_DIR/templates/root-claude.md" "$PROJECT_DIR/CLAUDE.md"
+else
+  echo "  CLAUDE.md already exists, keeping existing."
+fi
 
 # Worker CLAUDE.md template
 cp "$SCRIPT_DIR/templates/worker-claude.md" "$CLAUDE_DIR/worker-claude.md"
@@ -260,7 +270,7 @@ if [ "$ALREADY_RUNNING" = false ]; then
   else
     # Register workers
     for i in $(seq 1 "$NUM_WORKERS"); do
-      mac10 ping >/dev/null 2>&1 || true
+      mac10 register-worker "$i" "$WORKTREE_DIR/wt-$i" "agent-$i" 2>/dev/null || true
     done
     echo "  Coordinator running (PID: $COORD_PID)"
   fi
@@ -290,9 +300,9 @@ if [ -f "$WT_EXE" ]; then
   echo "  Master-3 (Allocator/Sonnet) terminal opened."
 else
   echo "  Windows Terminal not found — start manually:"
-  echo "    cd $PROJECT_DIR && claude --model sonnet /master-loop"
-  echo "    cd $PROJECT_DIR && claude --model opus /architect-loop"
-  echo "    cd $PROJECT_DIR && claude --model sonnet /allocate-loop"
+  echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model sonnet /master-loop"
+  echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model opus /architect-loop"
+  echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model sonnet /allocate-loop"
 fi
 
 echo ""
