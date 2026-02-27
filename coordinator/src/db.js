@@ -39,6 +39,11 @@ function init(projectDir) {
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
   db.pragma('foreign_keys = ON');
+  // Migrate: add claimed_by column if missing (added in 3-master update)
+  const cols = db.prepare("PRAGMA table_info(workers)").all().map(c => c.name);
+  if (!cols.includes('claimed_by')) {
+    db.exec("ALTER TABLE workers ADD COLUMN claimed_by TEXT");
+  }
   // Store project dir in config
   db.prepare('UPDATE config SET value = ? WHERE key = ?').run(projectDir, 'project_dir');
   return db;
