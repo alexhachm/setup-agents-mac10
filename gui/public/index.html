@@ -104,16 +104,29 @@
         <div class="panel-header" data-panel="tasks"><h2>Tasks</h2></div>
         <div id="tasks-list"></div>
       </section>
-    </div>
 
-    <section id="log-panel">
-      <div class="panel-header" data-panel="log"><h2>Activity Log</h2></div>
-      <div id="log-list"></div>
-    </section>
+      <section id="log-panel">
+        <div class="panel-header" data-panel="log"><h2>Activity Log</h2></div>
+        <div id="log-list"></div>
+      </section>
+    </div>
 
     <div id="settings-panel" class="settings-panel" style="display:none">
       <div class="settings-panel-title"></div>
       <div class="settings-panel-items"></div>
+    </div>
+
+    <div id="column-config-overlay" class="column-config-overlay" style="display:none">
+      <div class="column-config-modal">
+        <div class="column-config-header">
+          <h3 id="column-config-title">Column Order</h3>
+        </div>
+        <div id="column-config-list" class="column-config-list"></div>
+        <div class="column-config-footer">
+          <button id="column-config-cancel" class="column-config-btn cancel">Cancel</button>
+          <button id="column-config-save" class="column-config-btn save">Save Order</button>
+        </div>
+      </div>
     </div>
   </main>
 

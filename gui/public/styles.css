@@ -74,6 +74,10 @@ main { padding: 24px; max-width: 1400px; margin: 0 auto; }
   margin-bottom: 24px;
 }
 
+.grid > #log-panel {
+  grid-column: 1 / -1;
+}
+
 section {
   background: #161b22;
   border: 1px solid #21262d;
@@ -403,11 +407,52 @@ h2 {
   display: flex;
   align-items: center;
   gap: 8px;
-  cursor: default;
+  cursor: grab;
   user-select: none;
 }
 
 .panel-header h2 { margin-bottom: 0; }
+
+/* Color-link dot */
+.link-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid #484f58;
+  background: transparent;
+  cursor: pointer;
+  margin-left: auto;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.link-color-dot:hover {
+  border-color: #8b949e;
+}
+
+.link-color-dot.active {
+  border-width: 0;
+  width: 12px;
+  height: 12px;
+}
+
+/* Panel drag states */
+.grid > section {
+  transition: opacity 0.15s, outline 0.15s;
+}
+
+.grid > section[draggable="true"] {
+  cursor: grab;
+}
+
+.grid > section.panel-dragging {
+  opacity: 0.4;
+}
+
+.grid > section.panel-drag-over {
+  outline: 2px solid #58a6ff;
+  outline-offset: -2px;
+}
 
 /* Settings panel (right-click overlay) */
 .settings-panel {
@@ -449,6 +494,167 @@ h2 {
   color: #8b949e;
   width: 18px;
   text-align: center;
+}
+
+/* Color-link picker in settings panel */
+.link-color-picker {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.link-color-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 1.5px solid transparent;
+  transition: transform 0.1s;
+}
+
+.link-color-swatch:hover {
+  transform: scale(1.3);
+}
+
+.link-color-swatch.none {
+  background: #21262d;
+  border-color: #484f58;
+}
+
+.link-color-swatch.selected {
+  outline: 2px solid #c9d1d9;
+  outline-offset: 1px;
+}
+
+/* Settings panel divider */
+.settings-panel-divider {
+  height: 1px;
+  background: #30363d;
+  margin: 4px 0;
+}
+
+/* Task meta field inline spacing */
+.task-meta-field {
+  color: #8b949e;
+  font-size: 11px;
+  margin-right: 6px;
+}
+
+/* Column config overlay */
+.column-config-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.column-config-modal {
+  background: #1c2128;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  min-width: 300px;
+  max-width: 400px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.column-config-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #21262d;
+}
+
+.column-config-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #c9d1d9;
+}
+
+.column-config-list {
+  padding: 8px 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.column-config-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  cursor: grab;
+  transition: background 0.15s;
+  user-select: none;
+}
+
+.column-config-row:hover {
+  background: #263040;
+}
+
+.column-config-row.dragging {
+  opacity: 0.4;
+  background: #1c2d3f;
+}
+
+.column-config-row.drag-over {
+  border-top: 2px solid #58a6ff;
+}
+
+.column-drag-handle {
+  color: #484f58;
+  font-size: 14px;
+  cursor: grab;
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+}
+
+.column-config-label {
+  font-size: 13px;
+  color: #c9d1d9;
+  flex: 1;
+}
+
+.column-config-key {
+  font-size: 11px;
+  color: #484f58;
+  font-family: monospace;
+}
+
+.column-config-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #21262d;
+}
+
+.column-config-btn {
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid #30363d;
+}
+
+.column-config-btn.cancel {
+  background: #21262d;
+  color: #c9d1d9;
+}
+
+.column-config-btn.cancel:hover {
+  background: #30363d;
+}
+
+.column-config-btn.save {
+  background: #238636;
+  color: #fff;
+  border: none;
+}
+
+.column-config-btn.save:hover {
+  background: #2ea043;
 }
 
 @media (max-width: 900px) {
