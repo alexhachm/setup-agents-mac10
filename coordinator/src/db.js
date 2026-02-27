@@ -156,7 +156,13 @@ function checkAndPromoteTasks() {
       updateTask(task.id, { status: 'ready' });
       continue;
     }
-    const deps = JSON.parse(task.depends_on);
+    let deps;
+    try {
+      deps = JSON.parse(task.depends_on);
+    } catch (e) {
+      updateTask(task.id, { status: 'failed', result: `Invalid depends_on JSON: ${e.message}` });
+      continue;
+    }
     const unfinished = getDb().prepare(
       `SELECT COUNT(*) as cnt FROM tasks WHERE id IN (${deps.map(() => '?').join(',')}) AND status != 'completed'`
     ).get(...deps);
@@ -247,7 +253,20 @@ function checkMail(recipient, consume = true) {
       `UPDATE mail SET consumed = 1 WHERE id IN (${ids.map(() => '?').join(',')})`
     ).run(...ids);
   }
-  return messages.map(m => ({ ...m, payload: JSON.parse(m.payload) }));
+  return messages.map(m => {
+    try {
+      return { ...m, payload: JSON.parse(m.payload) };
+    } catch (e) {
+      return { ...m, payload: { _raw: m.payload, _parse_error: true } };
+    }
+  });
+}
+
+function purgeOldMail(days) {
+  const result = getDb().prepare(
+    "DELETE FROM mail WHERE consumed = 1 AND created_at < datetime('now', '-' || ? || ' days')"
+  ).run(days);
+  return result.changes;
 }
 
 function checkMailBlocking(recipient, timeoutMs = 300000, pollMs = 1000) {
@@ -323,7 +342,7 @@ module.exports = {
   createRequest, getRequest, updateRequest, listRequests,
   createTask, getTask, updateTask, listTasks, getReadyTasks, checkAndPromoteTasks,
   registerWorker, getWorker, updateWorker, getIdleWorkers, getAllWorkers, claimWorker, releaseWorker, checkRequestCompletion,
-  sendMail, checkMail, checkMailBlocking,
+  sendMail, checkMail, checkMailBlocking, purgeOldMail,
   enqueueMerge, getNextMerge, updateMerge,
   log, getLog,
   getConfig, setConfig,

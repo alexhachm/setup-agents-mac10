@@ -3,6 +3,8 @@
 
   let ws = null;
   let reconnectTimer = null;
+  let reconnectDelay = 1000;
+  const MAX_RECONNECT_DELAY = 30000;
   let setupRunning = false;
   let gitPushing = false;
 
@@ -13,13 +15,15 @@
     ws.onopen = () => {
       document.getElementById('status-indicator').className = 'status-dot connected';
       document.getElementById('status-text').textContent = 'Connected';
+      reconnectDelay = 1000;
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     };
 
     ws.onclose = () => {
       document.getElementById('status-indicator').className = 'status-dot disconnected';
       document.getElementById('status-text').textContent = 'Disconnected';
-      reconnectTimer = setTimeout(connect, 3000);
+      reconnectTimer = setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
     };
 
     ws.onmessage = (event) => {
@@ -38,7 +42,7 @@
         } else if (msg.type === 'git_push_complete') {
           onGitPushComplete(msg.code);
         }
-      } catch {}
+      } catch (e) { console.error('WS parse error:', e); }
     };
   }
 
@@ -94,7 +98,7 @@
         <div class="task-subject">${escapeHtml(t.subject)}</div>
         <div class="task-meta">
           ${t.domain ? `[${escapeHtml(t.domain)}]` : ''} T${t.tier}
-          ${t.assigned_to ? `→ worker-${t.assigned_to}` : ''}
+          ${t.assigned_to ? `→ worker-${escapeHtml(String(t.assigned_to))}` : ''}
           ${t.pr_url ? renderPrLink(t.pr_url) : ''}
         </div>
       </div>
@@ -108,16 +112,16 @@
         renderState(data);
         renderLog(data.logs || []);
       })
-      .catch(() => {});
+      .catch(err => console.error('Status fetch failed:', err));
   }
 
   function renderLog(logs) {
     const el = document.getElementById('log-list');
     el.innerHTML = logs.reverse().slice(0, 50).map(l => `
       <div class="log-entry">
-        <span class="log-time">${l.created_at}</span>
-        <span class="log-actor">${l.actor}</span>
-        <span class="log-action">${l.action}</span>
+        <span class="log-time">${escapeHtml(l.created_at)}</span>
+        <span class="log-actor">${escapeHtml(l.actor)}</span>
+        <span class="log-action">${escapeHtml(l.action)}</span>
         ${l.details ? `<span style="color:#484f58">${escapeHtml(l.details.substring(0, 80))}</span>` : ''}
       </div>
     `).join('');
@@ -134,7 +138,7 @@
     try {
       const parsed = new URL(url);
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-        return escapeHtml(url);
+        return parsed.href;
       }
     } catch {}
     return null;
@@ -184,7 +188,7 @@
           body.classList.remove('collapsed');
         }
       })
-      .catch(() => {});
+      .catch(err => console.error('Config fetch failed:', err));
   }
 
   function appendSetupLog(line) {
@@ -336,7 +340,9 @@
           btn.disabled = false;
         }
       })
-      .catch(() => {
+      .catch(err => {
+        status.textContent = 'Error: ' + err.message;
+        status.style.cssText = 'color:#f85149';
         btn.textContent = 'Launch';
         btn.disabled = false;
       });
@@ -423,7 +429,7 @@
         input.value = '';
         fetchStatus();
       }
-    }).catch(() => {});
+    }).catch(err => console.error('Request submit failed:', err));
   });
 
   document.getElementById('request-input').addEventListener('keydown', (e) => {

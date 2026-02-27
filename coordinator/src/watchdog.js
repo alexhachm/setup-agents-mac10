@@ -5,6 +5,7 @@ const tmux = require('./tmux');
 const { execSync } = require('child_process');
 
 let intervalId = null;
+let lastMailPurge = 0;
 
 // Escalation thresholds (seconds since last heartbeat)
 const THRESHOLDS = {
@@ -80,6 +81,15 @@ function tick(projectDir) {
 
   // Orphan task recovery: tasks assigned but worker is idle
   recoverOrphanTasks();
+
+  // Periodic mail purge (once per hour)
+  if (now - lastMailPurge > 3600000) {
+    lastMailPurge = now;
+    const purged = db.purgeOldMail(7);
+    if (purged > 0) {
+      db.log('coordinator', 'mail_purged', { count: purged });
+    }
+  }
 }
 
 function escalate(worker, staleSec, projectDir) {

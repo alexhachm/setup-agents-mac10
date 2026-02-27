@@ -157,17 +157,20 @@ function handleCommand(cmd, conn, handlers) {
         break;
       }
       case 'fix': {
-        const id = db.createRequest(args.description);
-        db.updateRequest(id, { tier: 2, status: 'decomposed' });
-        const taskId = db.createTask({
-          request_id: id,
-          subject: `Fix: ${args.description}`,
-          description: args.description,
-          priority: 'urgent',
-          tier: 2,
-        });
-        db.updateTask(taskId, { status: 'ready' });
-        respond(conn, { ok: true, request_id: id, task_id: taskId });
+        const fixResult = db.getDb().transaction(() => {
+          const id = db.createRequest(args.description);
+          db.updateRequest(id, { tier: 2, status: 'decomposed' });
+          const taskId = db.createTask({
+            request_id: id,
+            subject: `Fix: ${args.description}`,
+            description: args.description,
+            priority: 'urgent',
+            tier: 2,
+          });
+          db.updateTask(taskId, { status: 'ready' });
+          return { request_id: id, task_id: taskId };
+        })();
+        respond(conn, { ok: true, ...fixResult });
         break;
       }
       case 'status': {
@@ -309,8 +312,14 @@ function handleCommand(cmd, conn, handlers) {
         const timeoutMs = args.timeout || 300000;
         const pollMs = 1000;
         const deadline = Date.now() + timeoutMs;
+        let cancelled = false;
+
+        conn.on('close', () => { cancelled = true; });
+        conn.on('end', () => { cancelled = true; });
+        conn.on('error', () => { cancelled = true; });
 
         const poll = () => {
+          if (cancelled) return;
           try {
             const msgs = db.checkMail(recipient);
             if (msgs.length > 0) {

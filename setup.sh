@@ -151,10 +151,19 @@ MAC10_BIN="$SCRIPT_DIR/coordinator/bin/mac10"
 chmod +x "$MAC10_BIN"
 
 # Create a wrapper script in the project
-cat > "$CLAUDE_DIR/scripts/mac10" << WRAPPER
+cat > "$CLAUDE_DIR/scripts/mac10" << 'WRAPPER'
 #!/usr/bin/env bash
-exec node "$MAC10_BIN" "\$@"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAC10_BIN="PLACEHOLDER_MAC10_BIN"
+if [ ! -f "$MAC10_BIN" ]; then
+  echo "ERROR: mac10 CLI not found at $MAC10_BIN" >&2
+  echo "  Has the setup-agents repo moved? Re-run setup.sh to fix." >&2
+  exit 1
+fi
+exec node "$MAC10_BIN" "$@"
 WRAPPER
+# Substitute the actual path into the wrapper (quoted heredoc prevents expansion above)
+sed -i "s|PLACEHOLDER_MAC10_BIN|$MAC10_BIN|" "$CLAUDE_DIR/scripts/mac10"
 chmod +x "$CLAUDE_DIR/scripts/mac10"
 
 # Add to PATH for this project's agents
@@ -247,7 +256,7 @@ echo "[8/8] Starting coordinator..."
 
 # Check if coordinator is already running (e.g. launched by GUI)
 ALREADY_RUNNING=false
-if [ -S "$CLAUDE_DIR/state/mac10.sock" ] || lsof -i :${MAC10_PORT:-3100} &>/dev/null 2>&1; then
+if [ -S "$CLAUDE_DIR/state/mac10.sock" ] || mac10 ping &>/dev/null 2>&1; then
   ALREADY_RUNNING=true
   echo "  Coordinator already running, skipping start."
 fi
@@ -268,9 +277,22 @@ if [ "$ALREADY_RUNNING" = false ]; then
     echo "WARNING: Coordinator didn't create socket within 6s"
     echo "  Check logs or run: node $SCRIPT_DIR/coordinator/src/index.js $PROJECT_DIR"
   else
-    # Register workers
+    # Wait for coordinator to be responsive
+    for attempt in $(seq 1 5); do
+      if mac10 ping &>/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
+
+    # Register workers (with retry)
     for i in $(seq 1 "$NUM_WORKERS"); do
-      mac10 register-worker "$i" "$WORKTREE_DIR/wt-$i" "agent-$i" 2>/dev/null || true
+      for attempt in 1 2 3; do
+        if mac10 register-worker "$i" "$WORKTREE_DIR/wt-$i" "agent-$i" 2>/dev/null; then
+          break
+        fi
+        sleep 1
+      done
     done
     echo "  Coordinator running (PID: $COORD_PID)"
   fi
