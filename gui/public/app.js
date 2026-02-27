@@ -436,6 +436,22 @@
     if (e.key === 'Enter') document.getElementById('request-btn').click();
   });
 
+  // Popout buttons
+  document.querySelectorAll('.popout-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var panel = btn.getAttribute('data-panel');
+      var width = 600;
+      var height = 500;
+      var left = window.screenX + 50;
+      var top = window.screenY + 50;
+      window.open(
+        'popout.html?panel=' + encodeURIComponent(panel),
+        'mac10_popout_' + panel,
+        'width=' + width + ',height=' + height + ',left=' + left + ',top=' + top + ',resizable=yes,scrollbars=yes'
+      );
+    });
+  });
+
   // Initial load
   fetchConfig();
   fetchStatus();
