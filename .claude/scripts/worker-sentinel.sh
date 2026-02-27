@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# mac10 worker sentinel — simplified from mac9 (137→~35 lines)
-# Runs in a tmux window. Waits for tasks via mac10 inbox, syncs, launches claude.
+# mac10 worker sentinel — runs in a tmux window.
+# Waits for tasks via mac10 inbox, syncs git, launches claude, resets on exit.
 set -euo pipefail
 export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 
@@ -9,6 +9,9 @@ PROJECT_DIR="${2:?Usage: worker-sentinel.sh <worker_id> <project_dir>}"
 WORKTREE="$PROJECT_DIR/.worktrees/wt-$WORKER_ID"
 
 cd "$WORKTREE" || { echo "Worktree not found: $WORKTREE"; exit 1; }
+
+# Ensure mac10 CLI is on PATH
+export PATH="$PROJECT_DIR/.claude/scripts:$PATH"
 
 cleanup() { mac10 heartbeat "$WORKER_ID" 2>/dev/null; }
 trap cleanup EXIT
@@ -33,9 +36,10 @@ while true; do
 
     # Launch Claude worker
     echo "[sentinel-$WORKER_ID] Launching claude..."
-    claude --model opus "/worker-loop" 2>&1 || true
+    claude --model opus --dangerously-skip-permissions "/worker-loop" 2>&1 || true
 
-    echo "[sentinel-$WORKER_ID] Claude exited, resetting status..."
+    # Reset worker status to idle after Claude exits
+    echo "[sentinel-$WORKER_ID] Claude exited, resetting to idle..."
     mac10 heartbeat "$WORKER_ID" 2>/dev/null || true
   fi
 done

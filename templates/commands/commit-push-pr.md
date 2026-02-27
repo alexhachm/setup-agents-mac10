@@ -49,7 +49,13 @@ And report the conflict.
 git push origin HEAD
 ```
 
-If rejected (branch behind):
+If rejected (branch behind), pull and retry:
+
+```bash
+git pull --rebase origin HEAD && git push origin HEAD
+```
+
+If still rejected:
 
 ```bash
 git push --force-with-lease origin HEAD

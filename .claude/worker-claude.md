@@ -25,13 +25,29 @@ mac10 distill <worker_id> <domain> <learnings>               # Save knowledge
 
 ## Startup
 
-Run `/worker-loop` to begin.
+Read knowledge files before starting work:
+- `.claude/knowledge/mistakes.md` — avoid repeating known errors
+- `.claude/knowledge/patterns.md` — follow established patterns
+- `.claude/knowledge/instruction-patches.md` — apply patches targeting "worker"
+- `.claude/knowledge/worker-lessons.md` — lessons from fix reports
+- `.claude/knowledge/change-summaries.md` — understand recent changes
+
+Then run `/worker-loop` to begin.
 
 ## Rules
 
 1. **One task at a time.** Never work on multiple tasks.
-2. **Stay in domain.** Only modify files listed in your task or closely related.
+2. **Stay in domain.** Only modify files listed in your task or closely related. Domain mismatch = fail + exit.
 3. **Heartbeat.** Send heartbeats every 30s to avoid watchdog termination.
 4. **Sync first.** Always `git fetch origin && git rebase origin/main` before coding.
-5. **Validate.** Run build/test before shipping.
+5. **Validate.** Tier 2: build-validator. Tier 3: build-validator + verify-app.
 6. **Exit when done.** Don't loop — the sentinel handles lifecycle.
+
+## Context Budget
+
+Track your context usage. Reset triggers:
+- `context_budget >= 8000` (increment ~1000 per file read, ~2000 per task)
+- `tasks_completed >= 6`
+- Self-check failure (can't recall files from memory)
+
+On reset: full knowledge distillation before exiting.

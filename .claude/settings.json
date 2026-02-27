@@ -55,7 +55,25 @@
     "C:\\Users\\Owner\\Desktop\\setup-agents-mac8\\setup-agents-mac10\\.worktrees\\wt-1",
     "C:\\Users\\Owner\\Desktop\\setup-agents-mac8\\setup-agents-mac10\\.worktrees\\wt-2",
     "C:\\Users\\Owner\\Desktop\\setup-agents-mac8\\setup-agents-mac10\\.worktrees\\wt-3",
-    "C:\\Users\\Owner\\Desktop\\setup-agents-mac8\\setup-agents-mac10\\.worktrees\\wt-4"
+    "C:\\Users\\Owner\\Desktop\\setup-agents-mac8\\setup-agents-mac10\\.worktrees\\wt-4",
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac8\\\\setup-agents-mac10",
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac8\\\\setup-agents-mac10\\\\.worktrees\\\\wt-1",
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac8\\\\setup-agents-mac10\\\\.worktrees\\\\wt-2",
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac8\\\\setup-agents-mac10\\\\.worktrees\\\\wt-3",
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac8\\\\setup-agents-mac10\\\\.worktrees\\\\wt-4"
   ],
-  "skipDangerousModePermissionPrompt": true
+  "skipDangerousModePermissionPrompt": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Read|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-secret-guard.sh\"'"
+          }
+        ]
+      }
+    ]
+  }
 }

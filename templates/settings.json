@@ -46,5 +46,18 @@
     "deny": []
   },
   "trustedDirectories": [],
-  "skipDangerousModePermissionPrompt": true
+  "skipDangerousModePermissionPrompt": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Read|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-secret-guard.sh\"'"
+          }
+        ]
+      }
+    ]
+  }
 }

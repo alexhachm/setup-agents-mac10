@@ -135,6 +135,11 @@ cp "$SCRIPT_DIR/templates/worker-claude.md" "$CLAUDE_DIR/worker-claude.md"
 cp "$SCRIPT_DIR/scripts/worker-sentinel.sh" "$CLAUDE_DIR/scripts/"
 chmod +x "$CLAUDE_DIR/scripts/worker-sentinel.sh"
 
+# Hooks
+mkdir -p "$CLAUDE_DIR/hooks"
+cp "$SCRIPT_DIR/.claude/hooks/pre-tool-secret-guard.sh" "$CLAUDE_DIR/hooks/" 2>/dev/null || true
+chmod +x "$CLAUDE_DIR/hooks/"*.sh 2>/dev/null || true
+
 # Settings
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 if [ ! -f "$SETTINGS_FILE" ]; then
@@ -200,15 +205,23 @@ for i in $(seq 1 "$NUM_WORKERS"); do
   # Copy CLAUDE.md for worker
   cp "$CLAUDE_DIR/worker-claude.md" "$WT_PATH/CLAUDE.md"
 
-  # Link/copy knowledge and commands to worktree
+  # Link/copy knowledge, commands, agents, hooks to worktree
   mkdir -p "$WT_PATH/.claude/commands"
-  mkdir -p "$WT_PATH/.claude/knowledge"
+  mkdir -p "$WT_PATH/.claude/knowledge/domain"
   mkdir -p "$WT_PATH/.claude/scripts"
+  mkdir -p "$WT_PATH/.claude/agents"
+  mkdir -p "$WT_PATH/.claude/hooks"
   cp "$CLAUDE_DIR/commands/"*.md "$WT_PATH/.claude/commands/"
   cp "$CLAUDE_DIR/scripts/mac10" "$WT_PATH/.claude/scripts/"
+  cp "$CLAUDE_DIR/agents/"*.md "$WT_PATH/.claude/agents/"
+  cp "$CLAUDE_DIR/hooks/"*.sh "$WT_PATH/.claude/hooks/" 2>/dev/null || true
+  chmod +x "$WT_PATH/.claude/hooks/"*.sh 2>/dev/null || true
 
   # Copy knowledge files (will be updated via main project junction/copy)
   cp -r "$CLAUDE_DIR/knowledge/"* "$WT_PATH/.claude/knowledge/" 2>/dev/null || true
+
+  # Copy settings.json to worktree so hooks are active
+  cp "$SETTINGS_FILE" "$WT_PATH/.claude/settings.json" 2>/dev/null || true
 
   echo "  Created worktree wt-$i (branch: $BRANCH)"
 done
