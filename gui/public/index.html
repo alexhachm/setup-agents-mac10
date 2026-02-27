@@ -91,25 +91,30 @@
 
     <div class="grid">
       <section id="workers-panel">
-        <div class="panel-header"><h2>Workers</h2><button class="popout-btn" data-panel="workers" title="Open in new window">&#8599;</button></div>
+        <div class="panel-header" data-panel="workers"><h2>Workers</h2></div>
         <div id="workers-list"></div>
       </section>
 
       <section id="requests-panel">
-        <div class="panel-header"><h2>Requests</h2><button class="popout-btn" data-panel="requests" title="Open in new window">&#8599;</button></div>
+        <div class="panel-header" data-panel="requests"><h2>Requests</h2></div>
         <div id="requests-list"></div>
       </section>
 
       <section id="tasks-panel">
-        <div class="panel-header"><h2>Tasks</h2><button class="popout-btn" data-panel="tasks" title="Open in new window">&#8599;</button></div>
+        <div class="panel-header" data-panel="tasks"><h2>Tasks</h2></div>
         <div id="tasks-list"></div>
       </section>
     </div>
 
     <section id="log-panel">
-      <div class="panel-header"><h2>Activity Log</h2><button class="popout-btn" data-panel="log" title="Open in new window">&#8599;</button></div>
+      <div class="panel-header" data-panel="log"><h2>Activity Log</h2></div>
       <div id="log-list"></div>
     </section>
+
+    <div id="settings-panel" class="settings-panel" style="display:none">
+      <div class="settings-panel-title"></div>
+      <div class="settings-panel-items"></div>
+    </div>
   </main>
 
   <script src="app.js"></script>
