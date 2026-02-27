@@ -178,10 +178,16 @@ function checkRequestCompletion(requestId) {
 
   const allMerged = allMerges.every(m => m.status === 'merged');
   if (allMerged && allMerges.length > 0) {
+    const result = `All ${allMerges.length} PR(s) merged successfully`;
     db.updateRequest(requestId, {
       status: 'completed',
       completed_at: new Date().toISOString(),
-      result: `All ${allMerges.length} PR(s) merged successfully`,
+      result,
+    });
+    // Notify Master-1 so the user learns the request is done
+    db.sendMail('master-1', 'request_completed', {
+      request_id: requestId,
+      result,
     });
     db.log('coordinator', 'request_completed', { request_id: requestId });
   }

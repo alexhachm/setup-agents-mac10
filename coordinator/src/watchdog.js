@@ -76,6 +76,9 @@ function tick(projectDir) {
     }
   }
 
+  // Worker context fatigue: workers with 6+ completed tasks should reset
+  checkWorkerFatigue();
+
   // Stale claim cleanup: workers claimed but no task assigned for >2 minutes
   releaseStaleClaimsCheck(now);
 
@@ -163,6 +166,22 @@ function handleDeath(worker, reason) {
     current_task_id: null,
     pid: null,
   });
+}
+
+function checkWorkerFatigue() {
+  // Workers with 6+ completed tasks need a context reset
+  const fatigued = db.getDb().prepare(
+    "SELECT * FROM workers WHERE tasks_completed >= 6 AND status IN ('idle', 'completed_task')"
+  ).all();
+
+  for (const worker of fatigued) {
+    // Reset their counter and log it
+    db.updateWorker(worker.id, { tasks_completed: 0 });
+    db.log('coordinator', 'worker_fatigue_reset', {
+      worker_id: worker.id,
+      tasks_completed: worker.tasks_completed,
+    });
+  }
 }
 
 function releaseStaleClaimsCheck(now) {

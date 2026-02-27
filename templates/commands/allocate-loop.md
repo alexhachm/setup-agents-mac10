@@ -54,6 +54,7 @@ This blocks until a message arrives. Message types:
 - `tasks_ready` — the Architect created tasks for a request (after Tier 3 triage)
 - `tasks_available` — the coordinator detected ready tasks + idle workers
 - `task_completed` — a worker finished a task (check if request is done)
+- `task_failed` — a worker failed a task (needs retry or escalation)
 
 ### Step 2: Handle Each Message
 
@@ -83,10 +84,26 @@ Increment `polling_cycle += 1`.
    mac10 check-completion $REQUEST_ID
    ```
 2. If all done, the merger will handle integration automatically.
-3. Check for more ready tasks that can now be assigned (dependencies may have been unblocked):
+3. Note the `tasks_completed` count for that worker — if it's approaching 6, prefer assigning new work to fresher workers.
+4. Check for more ready tasks that can now be assigned (dependencies may have been unblocked):
    ```bash
    mac10 ready-tasks
    ```
+
+**On `task_failed`:**
+
+1. Read the error from the message payload.
+2. Decide whether to retry:
+   - **Retriable** (transient error, build flake, timeout): create a new task with the same description and mark it ready:
+     ```bash
+     echo '{"request_id":"REQ_ID","subject":"Retry: original subject","description":"original description","domain":"...","files":[...],"tier":N,"priority":"high"}' | mac10 create-task -
+     ```
+   - **Non-retriable** (domain mismatch, impossible task): leave it for the Architect to handle — the Architect also receives `task_failed` messages and can re-decompose.
+3. Check if the request still has other active tasks:
+   ```bash
+   mac10 check-completion $REQUEST_ID
+   ```
+4. If ALL tasks for the request have failed, the request is stuck. The Architect will need to intervene (it gets the same `task_failed` mails).
 
 ### Step 3: Qualitative Self-Monitoring
 

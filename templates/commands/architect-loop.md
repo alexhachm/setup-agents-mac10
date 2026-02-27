@@ -24,13 +24,20 @@ Read context files if they exist:
 - `.claude/knowledge/mistakes.md`
 - `.claude/knowledge/instruction-patches.md` — apply any patches targeting "architect", then clear applied entries
 
+Read codebase map if it exists:
+- `.claude/state/codebase-map.json` — machine-readable domain map, coupling hotspots, launch commands
+
 Check current system state (catches work in-flight from before a reset):
 
 ```bash
 mac10 status
+mac10 worker-status
 ```
 
-Review the output: if any requests have `status: pending` or `status: triaging`, they need your attention. Process them before entering the main loop — triage each one as if you just received a `new_request` message.
+Review the output:
+- If any requests have `status: pending` or `status: triaging` → triage each one as if you just received a `new_request` message
+- If any workers have `claimed_by: "architect"` but no assigned task → release them: `mac10 release-worker $WORKER_ID`
+- Note which workers are busy and on what domains — this informs your Tier 2 worker selection
 
 ## The Loop
 
@@ -43,8 +50,31 @@ mac10 inbox architect --block
 This blocks until a message arrives. Message types:
 - `new_request` — user submitted a coding request
 - `clarification_reply` — user answered your question
+- `task_completed` — a worker finished a task (feedback on your Tier 2/3 work)
+- `task_failed` — a worker failed a task (may need re-decomposition or escalation)
 
-### Step 2: Triage the Request
+### Step 2: Handle the Message
+
+**On `new_request` or `clarification_reply`:** proceed to triage (Step 3).
+
+**On `task_completed`:**
+- Note which request it belongs to. Run `mac10 check-completion $REQUEST_ID`.
+- If all tasks for that request are done, the merger handles the rest — no action needed.
+- This is informational — use it to learn which decompositions worked well.
+
+**On `task_failed`:**
+- Read the error. Decide:
+  1. **Retriable** (transient error, merge conflict, test flake) → the allocator will handle retry. No action needed.
+  2. **Bad decomposition** (task description was wrong, missing context, impossible as specified) → create a corrected replacement task:
+     ```bash
+     echo '{"request_id":"REQ_ID","subject":"...","description":"corrected description","domain":"...","files":[...],"tier":2}' | mac10 create-task -
+     ```
+  3. **Needs user input** → ask for clarification: `mac10 ask-clarification $REQUEST_ID "..."`
+- Append the failure pattern to `.claude/knowledge/mistakes.md` if it reveals a decomposition issue.
+
+Then go to Step 9 (Loop).
+
+### Step 3: Triage the Request
 
 Read the request description. Classify into a tier:
 

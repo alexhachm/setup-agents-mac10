@@ -217,6 +217,7 @@ function handleCommand(cmd, conn, handlers) {
       case 'tier1-complete': {
         const { request_id, result } = args;
         db.updateRequest(request_id, { status: 'completed', result, completed_at: new Date().toISOString() });
+        db.sendMail('master-1', 'request_completed', { request_id, result });
         db.log('architect', 'tier1_complete', { request_id, result });
         respond(conn, { ok: true });
         break;
@@ -264,23 +265,39 @@ function handleCommand(cmd, conn, handlers) {
           result: result || null,
           completed_at: new Date().toISOString(),
         });
+        // Increment tasks_completed counter on worker
+        const workerRow = db.getWorker(worker_id);
+        const tasksCompleted = (workerRow ? workerRow.tasks_completed : 0) + 1;
         db.updateWorker(worker_id, {
           status: 'completed_task',
           current_task_id: null,
+          tasks_completed: tasksCompleted,
         });
         // Enqueue merge if PR exists
+        const completedTask = db.getTask(task_id);
         if (pr_url) {
-          const task = db.getTask(task_id);
           db.enqueueMerge({
-            request_id: task.request_id,
+            request_id: completedTask.request_id,
             task_id,
             pr_url,
             branch: branch || '',
-            priority: task.priority === 'urgent' ? 10 : 0,
+            priority: completedTask.priority === 'urgent' ? 10 : 0,
           });
         }
-        db.sendMail('allocator', 'task_completed', { worker_id, task_id, pr_url });
-        db.log(`worker-${worker_id}`, 'task_completed', { task_id, pr_url, result });
+        db.sendMail('allocator', 'task_completed', {
+          worker_id, task_id,
+          request_id: completedTask.request_id,
+          pr_url,
+          tasks_completed: tasksCompleted,
+        });
+        // Notify architect so it has visibility into Tier 2 outcomes
+        db.sendMail('architect', 'task_completed', {
+          worker_id, task_id,
+          request_id: completedTask.request_id,
+          pr_url,
+          result,
+        });
+        db.log(`worker-${worker_id}`, 'task_completed', { task_id, pr_url, result, tasks_completed: tasksCompleted });
         // Notify handlers for merge check
         if (handlers.onTaskCompleted) handlers.onTaskCompleted(task_id);
         respond(conn, { ok: true });
@@ -288,8 +305,22 @@ function handleCommand(cmd, conn, handlers) {
       }
       case 'fail-task': {
         const { worker_id: wid, task_id: tid, error } = args;
+        const failedTask = db.getTask(tid);
         db.updateTask(tid, { status: 'failed', result: error, completed_at: new Date().toISOString() });
         db.updateWorker(wid, { status: 'idle', current_task_id: null });
+        db.sendMail('allocator', 'task_failed', {
+          worker_id: wid,
+          task_id: tid,
+          request_id: failedTask ? failedTask.request_id : null,
+          error,
+        });
+        // Also notify architect so it has visibility into failures
+        db.sendMail('architect', 'task_failed', {
+          worker_id: wid,
+          task_id: tid,
+          request_id: failedTask ? failedTask.request_id : null,
+          error,
+        });
         db.log(`worker-${wid}`, 'task_failed', { task_id: tid, error });
         respond(conn, { ok: true });
         break;
