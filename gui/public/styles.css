@@ -76,13 +76,13 @@ main { padding: 24px; max-width: 1400px; margin: 0 auto; }
 
 section {
   background: #161b22;
-  border: 1px solid #30363d;
+  border: 1px solid #21262d;
   border-radius: 8px;
   padding: 16px;
 }
 
 h2 {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   color: #8b949e;
   text-transform: uppercase;
@@ -92,7 +92,7 @@ h2 {
 
 .worker-card {
   padding: 10px;
-  border: 1px solid #30363d;
+  border: 1px solid #21262d;
   border-radius: 6px;
   margin-bottom: 8px;
 }
@@ -118,7 +118,7 @@ h2 {
 
 .request-item, .task-item {
   padding: 10px;
-  border: 1px solid #30363d;
+  border: 1px solid #21262d;
   border-radius: 6px;
   margin-bottom: 8px;
   font-size: 13px;
@@ -286,7 +286,7 @@ h2 {
 
 .master-card {
   padding: 12px;
-  border: 1px solid #30363d;
+  border: 1px solid #21262d;
   border-radius: 6px;
   text-align: center;
 }
