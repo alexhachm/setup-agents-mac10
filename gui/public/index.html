@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>mac10 Dashboard</title>
   <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <header>
@@ -105,6 +106,20 @@
         <div id="tasks-list"></div>
       </section>
     </div>
+
+    <section id="charts-panel">
+      <h2>Charts</h2>
+      <div class="charts-grid">
+        <div class="chart-container">
+          <h3>Worker Status</h3>
+          <canvas id="worker-chart"></canvas>
+        </div>
+        <div class="chart-container">
+          <h3>Task Status</h3>
+          <canvas id="task-chart"></canvas>
+        </div>
+      </div>
+    </section>
 
     <section id="log-panel">
       <div class="panel-header" data-panel="log"><h2>Activity Log</h2></div>

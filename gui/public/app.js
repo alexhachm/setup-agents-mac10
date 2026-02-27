@@ -7,6 +7,8 @@
   const MAX_RECONNECT_DELAY = 30000;
   let setupRunning = false;
   let gitPushing = false;
+  let workerChart = null;
+  let taskChart = null;
 
   function connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -50,6 +52,7 @@
     renderWorkers(data.workers || []);
     renderRequests(data.requests || []);
     renderTasks(data.tasks || []);
+    updateCharts(data.workers || [], data.tasks || []);
   }
 
   function renderWorkers(workers) {
@@ -103,6 +106,83 @@
         </div>
       </div>
     `).join('');
+  }
+
+  // --- Charts ---
+
+  const chartColors = {
+    idle: '#8b949e',
+    assigned: '#58a6ff',
+    running: '#3fb950',
+    busy: '#3fb950',
+    completed_task: '#bc8cff',
+    resetting: '#d29922',
+    pending: '#d29922',
+    ready: '#58a6ff',
+    in_progress: '#58a6ff',
+    completed: '#3fb950',
+    failed: '#f85149',
+    blocked: '#8b949e'
+  };
+
+  function countByStatus(items) {
+    const counts = {};
+    items.forEach(function(item) {
+      const s = item.status || 'unknown';
+      counts[s] = (counts[s] || 0) + 1;
+    });
+    return counts;
+  }
+
+  function buildChartData(counts, colorMap) {
+    const labels = Object.keys(counts);
+    const data = labels.map(function(l) { return counts[l]; });
+    const colors = labels.map(function(l) { return colorMap[l] || '#484f58'; });
+    return { labels: labels, data: data, colors: colors };
+  }
+
+  function createDoughnutChart(canvasId, label) {
+    var ctx = document.getElementById(canvasId);
+    if (!ctx || typeof Chart === 'undefined') return null;
+    return new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: [],
+        datasets: [{
+          data: [],
+          backgroundColor: [],
+          borderWidth: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: { color: '#8b949e', font: { size: 11 }, padding: 12, boxWidth: 12 }
+          }
+        },
+        cutout: '60%'
+      }
+    });
+  }
+
+  function updateChartInstance(chart, counts) {
+    if (!chart) return;
+    var cd = buildChartData(counts, chartColors);
+    chart.data.labels = cd.labels;
+    chart.data.datasets[0].data = cd.data;
+    chart.data.datasets[0].backgroundColor = cd.colors;
+    chart.update('none');
+  }
+
+  function updateCharts(workers, tasks) {
+    if (typeof Chart === 'undefined') return;
+    if (!workerChart) workerChart = createDoughnutChart('worker-chart', 'Workers');
+    if (!taskChart) taskChart = createDoughnutChart('task-chart', 'Tasks');
+    updateChartInstance(workerChart, countByStatus(workers));
+    updateChartInstance(taskChart, countByStatus(tasks));
   }
 
   function fetchStatus() {
