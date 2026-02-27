@@ -30,8 +30,7 @@ Read codebase map if it exists:
 Check current system state (catches work in-flight from before a reset):
 
 ```bash
-mac10 status
-mac10 worker-status
+mac10 status && mac10 worker-status
 ```
 
 Review the output:

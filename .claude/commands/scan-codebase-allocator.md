@@ -14,8 +14,7 @@ export PATH="$(pwd)/.claude/scripts:$PATH"
 
 1. Check current system state:
    ```bash
-   mac10 status
-   mac10 worker-status
+   mac10 status && mac10 worker-status
    ```
 
 2. Read knowledge files:
