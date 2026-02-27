@@ -58,7 +58,7 @@
       <div class="worker-card">
         <div class="worker-name">Worker ${w.id}</div>
         <span class="worker-status badge-${w.status}">${w.status}</span>
-        ${w.domain ? `<div style="font-size:11px;color:#8b949e;margin-top:4px">${w.domain}</div>` : ''}
+        ${w.domain ? `<div style="font-size:11px;color:#8b949e;margin-top:4px">${escapeHtml(w.domain)}</div>` : ''}
         ${w.current_task_id ? `<div style="font-size:11px;color:#58a6ff;margin-top:2px">Task #${w.current_task_id}</div>` : ''}
       </div>
     `).join('');
@@ -93,9 +93,9 @@
         <span class="worker-status badge-${t.status}">${t.status}</span>
         <div class="task-subject">${escapeHtml(t.subject)}</div>
         <div class="task-meta">
-          ${t.domain ? `[${t.domain}]` : ''} T${t.tier}
+          ${t.domain ? `[${escapeHtml(t.domain)}]` : ''} T${t.tier}
           ${t.assigned_to ? `→ worker-${t.assigned_to}` : ''}
-          ${t.pr_url ? `<a href="${t.pr_url}" target="_blank" style="color:#58a6ff">PR</a>` : ''}
+          ${t.pr_url ? renderPrLink(t.pr_url) : ''}
         </div>
       </div>
     `).join('');
@@ -118,7 +118,7 @@
         <span class="log-time">${l.created_at}</span>
         <span class="log-actor">${l.actor}</span>
         <span class="log-action">${l.action}</span>
-        ${l.details ? `<span style="color:#484f58">${l.details.substring(0, 80)}</span>` : ''}
+        ${l.details ? `<span style="color:#484f58">${escapeHtml(l.details.substring(0, 80))}</span>` : ''}
       </div>
     `).join('');
   }
@@ -127,6 +127,23 @@
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  function safeUrl(url) {
+    if (!url || typeof url !== 'string') return null;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return escapeHtml(url);
+      }
+    } catch {}
+    return null;
+  }
+
+  function renderPrLink(prUrl) {
+    const safe = safeUrl(prUrl);
+    if (!safe) return '';
+    return `<a href="${safe}" target="_blank" rel="noopener" style="color:#58a6ff">PR</a>`;
   }
 
   // --- Setup panel ---
@@ -252,6 +269,35 @@
     const btn = document.getElementById('setup-toggle');
     body.classList.toggle('collapsed');
     btn.innerHTML = body.classList.contains('collapsed') ? '&#9654;' : '&#9660;';
+  });
+
+  // --- Architect launch ---
+
+  document.getElementById('architect-btn').addEventListener('click', () => {
+    const btn = document.getElementById('architect-btn');
+    const status = document.getElementById('architect-status');
+    btn.disabled = true;
+    btn.textContent = 'Launching...';
+
+    fetch('/api/architect/launch', { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          status.textContent = 'Terminal opened';
+          status.style.cssText = 'background:#1c3a2a;color:#3fb950';
+          btn.textContent = 'Launch Architect Terminal';
+          btn.disabled = false;
+        } else {
+          status.textContent = data.error || 'Failed';
+          status.style.cssText = 'background:#3d2b1f;color:#d29922';
+          btn.textContent = 'Launch Architect Terminal';
+          btn.disabled = false;
+        }
+      })
+      .catch(() => {
+        btn.textContent = 'Launch Architect Terminal';
+        btn.disabled = false;
+      });
   });
 
   // --- Git push ---

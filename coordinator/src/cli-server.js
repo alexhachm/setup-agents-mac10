@@ -7,6 +7,63 @@ const db = require('./db');
 
 let server = null;
 
+const MAX_PAYLOAD_SIZE = 1024 * 1024; // 1MB
+
+const COMMAND_SCHEMAS = {
+  'request':           { required: ['description'], types: { description: 'string' } },
+  'fix':               { required: ['description'], types: { description: 'string' } },
+  'status':            { required: [], types: {} },
+  'clarify':           { required: ['request_id', 'message'], types: { request_id: 'string', message: 'string' } },
+  'log':               { required: [], types: { limit: 'number', actor: 'string' } },
+  'triage':            { required: ['request_id', 'tier'], types: { request_id: 'string', tier: 'number', reasoning: 'string' } },
+  'create-task':       {
+    required: ['request_id', 'subject', 'description'],
+    types: { request_id: 'string', subject: 'string', description: 'string', domain: 'string', priority: 'string', tier: 'number' },
+    allowed: ['request_id', 'subject', 'description', 'domain', 'files', 'priority', 'tier', 'depends_on', 'validation'],
+  },
+  'tier1-complete':    { required: ['request_id', 'result'], types: { request_id: 'string', result: 'string' } },
+  'ask-clarification': { required: ['request_id', 'question'], types: { request_id: 'string', question: 'string' } },
+  'my-task':           { required: ['worker_id'], types: { worker_id: 'string' } },
+  'start-task':        { required: ['worker_id', 'task_id'], types: { worker_id: 'string' } },
+  'heartbeat':         { required: ['worker_id'], types: { worker_id: 'string' } },
+  'complete-task':     { required: ['worker_id', 'task_id'], types: { worker_id: 'string' } },
+  'fail-task':         { required: ['worker_id', 'task_id', 'error'], types: { worker_id: 'string', error: 'string' } },
+  'distill':           { required: ['worker_id'], types: { worker_id: 'string' } },
+  'inbox':             { required: ['recipient'], types: { recipient: 'string' } },
+  'inbox-block':       { required: ['recipient'], types: { recipient: 'string', timeout: 'number' } },
+  'repair':            { required: [], types: {} },
+  'ping':              { required: [], types: {} },
+};
+
+function validateCommand(cmd) {
+  const { command, args } = cmd;
+  if (typeof command !== 'string') {
+    throw new Error('Missing or invalid "command" field');
+  }
+  const schema = COMMAND_SCHEMAS[command];
+  if (!schema) return; // unknown commands handled by switch default
+
+  const a = args || {};
+  for (const field of schema.required) {
+    if (a[field] === undefined || a[field] === null) {
+      throw new Error(`Missing required field "${field}" for command "${command}"`);
+    }
+  }
+  for (const [field, expectedType] of Object.entries(schema.types)) {
+    if (a[field] !== undefined && a[field] !== null && typeof a[field] !== expectedType) {
+      throw new Error(`Field "${field}" must be of type ${expectedType}`);
+    }
+  }
+  // Strip unknown keys for create-task
+  if (schema.allowed && args) {
+    for (const key of Object.keys(args)) {
+      if (!schema.allowed.includes(key)) {
+        delete args[key];
+      }
+    }
+  }
+}
+
 function getSocketPath(projectDir) {
   const dir = path.join(projectDir, '.claude', 'state');
   fs.mkdirSync(dir, { recursive: true });
@@ -35,6 +92,11 @@ function start(projectDir, handlers) {
     let data = '';
     conn.on('data', (chunk) => {
       data += chunk.toString();
+      if (data.length > MAX_PAYLOAD_SIZE) {
+        respond(conn, { error: 'Payload too large' });
+        conn.destroy();
+        return;
+      }
       // Protocol: newline-delimited JSON
       const lines = data.split('\n');
       data = lines.pop(); // keep incomplete line
@@ -42,9 +104,10 @@ function start(projectDir, handlers) {
         if (!line.trim()) continue;
         try {
           const cmd = JSON.parse(line);
+          validateCommand(cmd);
           handleCommand(cmd, conn, handlers);
         } catch (e) {
-          respond(conn, { error: `Invalid JSON: ${e.message}` });
+          respond(conn, { error: e.message });
         }
       }
     });
@@ -54,7 +117,7 @@ function start(projectDir, handlers) {
   server.listen(socketPath, () => {
     // Make socket accessible (not needed on Windows named pipes)
     if (process.platform !== 'win32') {
-      try { fs.chmodSync(socketPath, 0o666); } catch {}
+      try { fs.chmodSync(socketPath, 0o600); } catch {}
     }
   });
 

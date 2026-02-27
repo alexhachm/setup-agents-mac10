@@ -130,14 +130,13 @@ function handleDeath(worker, reason) {
     task_id: worker.current_task_id,
   });
 
-  // If worker had a task, mark it for reassignment
+  // If worker had a task, conditionally mark it for reassignment
+  // Uses a single conditional UPDATE to avoid TOCTOU race with worker's complete-task
   if (worker.current_task_id) {
-    const task = db.getTask(worker.current_task_id);
-    if (task && task.status !== 'completed') {
-      db.updateTask(worker.current_task_id, {
-        status: 'ready',
-        assigned_to: null,
-      });
+    const result = db.getDb().prepare(
+      "UPDATE tasks SET status='ready', assigned_to=NULL, updated_at=datetime('now') WHERE id=? AND status NOT IN ('completed','failed')"
+    ).run(worker.current_task_id);
+    if (result.changes > 0) {
       db.log('coordinator', 'task_reassigned', {
         task_id: worker.current_task_id,
         reason: `worker-${worker.id} died (${reason})`,

@@ -1,7 +1,23 @@
 'use strict';
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const db = require('./db');
+
+const BRANCH_RE = /^[a-zA-Z0-9._\/-]+$/;
+const PR_URL_RE = /^https:\/\/github\.com\/[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+\/pull\/\d+$/;
+
+function validateEntry(entry) {
+  if (entry.branch && !BRANCH_RE.test(entry.branch)) {
+    throw new Error(`Invalid branch name: ${entry.branch}`);
+  }
+  if (entry.pr_url && !PR_URL_RE.test(entry.pr_url)) {
+    throw new Error(`Invalid PR URL: ${entry.pr_url}`);
+  }
+}
+
+function safeExec(file, args, cwd) {
+  return execFileSync(file, args, { encoding: 'utf8', cwd, timeout: 60000 }).trim();
+}
 
 let processing = false;
 
@@ -69,6 +85,8 @@ function processQueue(projectDir) {
 }
 
 function attemptMerge(entry, projectDir) {
+  validateEntry(entry);
+
   // 4-tier merge resolution
   // Tier 1: Clean merge via gh CLI
   const tier1 = tryCleanMerge(entry, projectDir);
@@ -90,7 +108,7 @@ function attemptMerge(entry, projectDir) {
 function tryCleanMerge(entry, projectDir) {
   try {
     // Merge PR via gh CLI
-    exec(`gh pr merge "${entry.pr_url}" --merge --delete-branch`, projectDir);
+    safeExec('gh', ['pr', 'merge', entry.pr_url, '--merge', '--delete-branch'], projectDir);
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -100,18 +118,18 @@ function tryCleanMerge(entry, projectDir) {
 function tryAutoResolve(entry, projectDir) {
   try {
     // Fetch latest, rebase the branch, force-push, then merge
-    exec(`git fetch origin`, projectDir);
-    exec(`git checkout ${entry.branch}`, projectDir);
-    exec(`git rebase origin/main`, projectDir);
-    exec(`git push --force-with-lease origin ${entry.branch}`, projectDir);
-    exec(`git checkout main`, projectDir);
+    safeExec('git', ['fetch', 'origin'], projectDir);
+    safeExec('git', ['checkout', entry.branch], projectDir);
+    safeExec('git', ['rebase', 'origin/main'], projectDir);
+    safeExec('git', ['push', '--force-with-lease', 'origin', entry.branch], projectDir);
+    safeExec('git', ['checkout', 'main'], projectDir);
     // Now try clean merge again
-    exec(`gh pr merge "${entry.pr_url}" --merge --delete-branch`, projectDir);
+    safeExec('gh', ['pr', 'merge', entry.pr_url, '--merge', '--delete-branch'], projectDir);
     return { success: true };
   } catch (e) {
     // Abort rebase if in progress
-    try { exec(`git rebase --abort`, projectDir); } catch {}
-    try { exec(`git checkout main`, projectDir); } catch {}
+    try { safeExec('git', ['rebase', '--abort'], projectDir); } catch {}
+    try { safeExec('git', ['checkout', 'main'], projectDir); } catch {}
     return { success: false, error: e.message };
   }
 }
@@ -167,10 +185,6 @@ function checkRequestCompletion(requestId) {
     });
     db.log('coordinator', 'request_completed', { request_id: requestId });
   }
-}
-
-function exec(cmd, cwd) {
-  return execSync(cmd, { encoding: 'utf8', cwd, timeout: 60000 }).trim();
 }
 
 module.exports = { start, onTaskCompleted, processQueue, attemptMerge };

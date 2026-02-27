@@ -4,8 +4,12 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const db = require('./db');
+
+const REPO_RE = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
+const SAFE_PATH_RE = /^\/[a-zA-Z0-9._\/ -]+$/;
 
 let server = null;
 let wss = null;
@@ -116,6 +120,12 @@ function start(projectDir, port = 3100, scriptDir = null) {
     if (!reqProjectDir) {
       return res.status(400).json({ ok: false, error: 'projectDir is required' });
     }
+    if (!SAFE_PATH_RE.test(reqProjectDir)) {
+      return res.status(400).json({ ok: false, error: 'Invalid project directory path' });
+    }
+    if (githubRepo && !REPO_RE.test(githubRepo)) {
+      return res.status(400).json({ ok: false, error: 'Invalid GitHub repo format. Expected owner/repo.' });
+    }
     if (setupProcess) {
       return res.status(409).json({ ok: false, error: 'Setup is already running' });
     }
@@ -194,6 +204,51 @@ function start(projectDir, port = 3100, scriptDir = null) {
     res.json({ ok: true, message: 'Setup started' });
   });
 
+  // --- Architect launch endpoint ---
+
+  app.post('/api/architect/launch', (req, res) => {
+    const repoDir = db.getConfig('project_dir') || projectDir;
+    if (!repoDir) {
+      return res.status(400).json({ ok: false, error: 'No project directory configured' });
+    }
+    if (!SAFE_PATH_RE.test(repoDir)) {
+      return res.status(400).json({ ok: false, error: 'Invalid project directory path' });
+    }
+    if (!fs.existsSync(repoDir)) {
+      return res.status(400).json({ ok: false, error: 'Project directory does not exist' });
+    }
+
+    // Detect WSL and open Windows Terminal tab
+    const isWSL = fs.existsSync('/proc/version') &&
+      fs.readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft');
+
+    if (isWSL) {
+      const user = process.env.USER || process.env.LOGNAME || 'owner';
+      const wt = `/mnt/c/Users/${user}/AppData/Local/Microsoft/WindowsApps/wt.exe`;
+      const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
+
+      const proc = spawn(wt, [
+        '-w', '0', 'new-tab', '--title', 'Architect', '--',
+        'wsl.exe', '-d', distro, '--', 'bash', '-c',
+        `cd '${repoDir}' && claude --model opus /architect-loop; exec bash`
+      ], { stdio: 'ignore', detached: true });
+      proc.unref();
+
+      db.log('gui', 'architect_launched', { projectDir: repoDir });
+      return res.json({ ok: true, message: 'Architect terminal opened' });
+    }
+
+    // macOS / Linux: open in tmux
+    const tmux = require('./tmux');
+    try {
+      tmux.createWindow('architect', `cd '${repoDir}' && claude --model opus /architect-loop`, repoDir);
+      db.log('gui', 'architect_launched', { projectDir: repoDir, method: 'tmux' });
+      return res.json({ ok: true, message: 'Architect launched in tmux window "architect"' });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   // --- Git push endpoint ---
 
   app.post('/api/git/push', (req, res) => {
@@ -202,8 +257,14 @@ function start(projectDir, port = 3100, scriptDir = null) {
     if (!repoDir) {
       return res.status(400).json({ ok: false, error: 'No project directory configured' });
     }
+    if (!SAFE_PATH_RE.test(repoDir)) {
+      return res.status(400).json({ ok: false, error: 'Invalid project directory path' });
+    }
     if (!repo) {
       return res.status(400).json({ ok: false, error: 'No GitHub repo configured. Set it in the Setup panel.' });
+    }
+    if (!REPO_RE.test(repo)) {
+      return res.status(400).json({ ok: false, error: 'Invalid GitHub repo format. Expected owner/repo.' });
     }
 
     db.log('gui', 'git_push_started', { repo, projectDir: repoDir });

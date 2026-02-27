@@ -80,16 +80,27 @@ function matchTasksToWorkers(tasks, workers) {
 }
 
 function assignTaskToWorker(task, worker, projectDir) {
-  // Mail-before-boot: record assignment in DB before spawning agent
-  db.updateTask(task.id, { status: 'assigned', assigned_to: worker.id });
-  db.updateWorker(worker.id, {
-    status: 'assigned',
-    current_task_id: task.id,
-    domain: task.domain || worker.domain,
-    launched_at: new Date().toISOString(),
-  });
+  // Atomic assignment: re-check task and worker status inside a transaction
+  const assigned = db.getDb().transaction(() => {
+    // Re-query to prevent TOCTOU race
+    const freshTask = db.getTask(task.id);
+    const freshWorker = db.getWorker(worker.id);
+    if (!freshTask || freshTask.status !== 'ready' || freshTask.assigned_to) return false;
+    if (!freshWorker || freshWorker.status !== 'idle') return false;
 
-  // Send mail to the worker
+    db.updateTask(task.id, { status: 'assigned', assigned_to: worker.id });
+    db.updateWorker(worker.id, {
+      status: 'assigned',
+      current_task_id: task.id,
+      domain: task.domain || worker.domain,
+      launched_at: new Date().toISOString(),
+    });
+    return true;
+  })();
+
+  if (!assigned) return;
+
+  // Non-transactional side effects: mail and tmux spawn
   db.sendMail(`worker-${worker.id}`, 'task_assigned', {
     task_id: task.id,
     subject: task.subject,

@@ -18,6 +18,27 @@ echo "Project:  $PROJECT_DIR"
 echo "Workers:  $NUM_WORKERS"
 echo ""
 
+# --- WSL shim: expose Windows-side CLIs if running under WSL ---
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  _wsl_shim() {
+    local cmd="$1"
+    if ! command -v "$cmd" &>/dev/null; then
+      for p in "/mnt/c/Program Files/GitHub CLI" "/mnt/c/Users/$USER/AppData/Local/Programs" "/mnt/c/ProgramData/chocolatey/bin"; do
+        if [ -f "$p/${cmd}.exe" ]; then
+          mkdir -p "$HOME/bin"
+          ln -sf "$p/${cmd}.exe" "$HOME/bin/$cmd"
+          export PATH="$HOME/bin:$PATH"
+          return
+        fi
+      done
+    fi
+  }
+  _wsl_shim gh
+  _wsl_shim claude
+  # Ensure nvm node is on PATH
+  [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" 2>/dev/null
+fi
+
 # --- Preflight checks ---
 
 echo "[1/8] Preflight checks..."
@@ -182,14 +203,14 @@ add_trusted() {
   local p="$1"
   # Add to settings.json trustedDirectories array
   if command -v python3 &>/dev/null; then
-    python3 -c "
+    python3 - "$SETTINGS_FILE" "$p" << 'PYEOF'
 import json, sys
-f = '$SETTINGS_FILE'
+f, p = sys.argv[1], sys.argv[2]
 with open(f) as fp: d = json.load(fp)
 dirs = d.setdefault('trustedDirectories', [])
-if '$p' not in dirs: dirs.append('$p')
+if p not in dirs: dirs.append(p)
 with open(f, 'w') as fp: json.dump(d, fp, indent=2)
-" 2>/dev/null || true
+PYEOF
   fi
 }
 
@@ -214,27 +235,50 @@ echo "  Trusted directories configured."
 
 echo "[8/8] Starting coordinator..."
 
-# Start the coordinator
-node "$SCRIPT_DIR/coordinator/src/index.js" "$PROJECT_DIR" &
-COORD_PID=$!
+# Check if coordinator is already running (e.g. launched by GUI)
+ALREADY_RUNNING=false
+if [ -S "$CLAUDE_DIR/state/mac10.sock" ] || lsof -i :${MAC10_PORT:-3100} &>/dev/null 2>&1; then
+  ALREADY_RUNNING=true
+  echo "  Coordinator already running, skipping start."
+fi
 
-# Wait for socket
-for i in $(seq 1 30); do
-  if [ -S "$CLAUDE_DIR/state/mac10.sock" ]; then
-    break
-  fi
-  sleep 0.2
-done
+if [ "$ALREADY_RUNNING" = false ]; then
+  node "$SCRIPT_DIR/coordinator/src/index.js" "$PROJECT_DIR" &
+  COORD_PID=$!
 
-if [ ! -S "$CLAUDE_DIR/state/mac10.sock" ]; then
-  echo "WARNING: Coordinator didn't create socket within 6s"
-  echo "  Check logs or run: node $SCRIPT_DIR/coordinator/src/index.js $PROJECT_DIR"
-else
-  # Register workers
-  for i in $(seq 1 "$NUM_WORKERS"); do
-    mac10 ping >/dev/null 2>&1 || true
+  # Wait for socket
+  for i in $(seq 1 30); do
+    if [ -S "$CLAUDE_DIR/state/mac10.sock" ]; then
+      break
+    fi
+    sleep 0.2
   done
-  echo "  Coordinator running (PID: $COORD_PID)"
+
+  if [ ! -S "$CLAUDE_DIR/state/mac10.sock" ]; then
+    echo "WARNING: Coordinator didn't create socket within 6s"
+    echo "  Check logs or run: node $SCRIPT_DIR/coordinator/src/index.js $PROJECT_DIR"
+  else
+    # Register workers
+    for i in $(seq 1 "$NUM_WORKERS"); do
+      mac10 ping >/dev/null 2>&1 || true
+    done
+    echo "  Coordinator running (PID: $COORD_PID)"
+  fi
+fi
+
+# --- Launch architect terminal ---
+
+echo "Launching architect terminal..."
+
+# Open a Windows Terminal tab with the architect loop
+WT_EXE="/mnt/c/Users/$USER/AppData/Local/Microsoft/WindowsApps/wt.exe"
+if [ -f "$WT_EXE" ]; then
+  WIN_PROJECT=$(echo "$PROJECT_DIR" | sed 's|^/mnt/\(.\)/|\U\1:\\|; s|/|\\|g')
+  "$WT_EXE" -w 0 new-tab --title "Architect" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash -c "cd '$PROJECT_DIR' && claude --model opus /architect-loop; exec bash" &
+  echo "  Architect terminal opened."
+else
+  echo "  Windows Terminal not found — start manually:"
+  echo "    cd $PROJECT_DIR && claude --model opus /architect-loop"
 fi
 
 echo ""
@@ -246,9 +290,6 @@ echo "Dashboard:    http://localhost:3100"
 echo "Submit work:  mac10 request \"Add user authentication\""
 echo "Check status: mac10 status"
 echo "View logs:    mac10 log"
-echo ""
-echo "To start the architect:"
-echo "  cd $PROJECT_DIR && claude --model opus /architect-loop"
 echo ""
 echo "Workers will be spawned automatically when tasks are assigned."
 echo ""
