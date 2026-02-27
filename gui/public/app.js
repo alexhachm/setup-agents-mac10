@@ -109,10 +109,26 @@
         section.classList.add('panel-dragging');
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', section.id);
+
+        // Highlight linked panels in the same color group
+        var draggedName = section.id.replace('-panel', '');
+        var dragColor = getPanelLinkColor(draggedName);
+        if (dragColor) {
+          var order = loadPanelOrder();
+          order.forEach(function(p) {
+            if (p !== draggedName && getPanelLinkColor(p) === dragColor) {
+              var el = document.getElementById(p + '-panel');
+              if (el) el.classList.add('panel-dragging');
+            }
+          });
+        }
       });
 
       section.addEventListener('dragend', function() {
         section.classList.remove('panel-dragging');
+        grid.querySelectorAll('.panel-dragging').forEach(function(el) {
+          el.classList.remove('panel-dragging');
+        });
         grid.querySelectorAll('.panel-drag-over').forEach(function(el) {
           el.classList.remove('panel-drag-over');
         });
@@ -122,7 +138,7 @@
       section.addEventListener('dragover', function(e) {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
-        if (draggedPanel && draggedPanel !== section) {
+        if (draggedPanel && draggedPanel !== section && !section.classList.contains('panel-dragging')) {
           section.classList.add('panel-drag-over');
         }
       });
