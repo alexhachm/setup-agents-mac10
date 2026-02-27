@@ -436,20 +436,58 @@
     if (e.key === 'Enter') document.getElementById('request-btn').click();
   });
 
-  // Popout buttons
-  document.querySelectorAll('.popout-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      var panel = btn.getAttribute('data-panel');
-      var width = 600;
-      var height = 500;
-      var left = window.screenX + 50;
-      var top = window.screenY + 50;
+  // Settings panel (right-click on panel header)
+  const settingsPanel = document.getElementById('settings-panel');
+
+  function openSettingsPanel(panelName, x, y) {
+    const titleEl = settingsPanel.querySelector('.settings-panel-title');
+    const itemsEl = settingsPanel.querySelector('.settings-panel-items');
+    const titles = { workers: 'Workers', requests: 'Requests', tasks: 'Tasks', log: 'Activity Log' };
+    titleEl.textContent = titles[panelName] || panelName;
+
+    itemsEl.innerHTML = '';
+
+    const popoutItem = document.createElement('div');
+    popoutItem.className = 'settings-panel-item';
+    popoutItem.innerHTML = '<span class="settings-icon">&#8599;</span> Open in new window';
+    popoutItem.addEventListener('click', function() {
       window.open(
-        'popout.html?panel=' + encodeURIComponent(panel),
-        'mac10_popout_' + panel,
-        'width=' + width + ',height=' + height + ',left=' + left + ',top=' + top + ',resizable=yes,scrollbars=yes'
+        'popout.html?panel=' + encodeURIComponent(panelName),
+        'mac10_popout_' + panelName,
+        'width=600,height=500,left=' + (window.screenX + 50) + ',top=' + (window.screenY + 50) + ',resizable=yes,scrollbars=yes'
       );
+      closeSettingsPanel();
     });
+    itemsEl.appendChild(popoutItem);
+
+    settingsPanel.style.display = '';
+    // Position within viewport bounds
+    const rect = settingsPanel.getBoundingClientRect();
+    const maxX = window.innerWidth - rect.width - 8;
+    const maxY = window.innerHeight - rect.height - 8;
+    settingsPanel.style.left = Math.min(x, maxX) + 'px';
+    settingsPanel.style.top = Math.min(y, maxY) + 'px';
+  }
+
+  function closeSettingsPanel() {
+    settingsPanel.style.display = 'none';
+  }
+
+  document.querySelectorAll('.panel-header[data-panel]').forEach(function(header) {
+    header.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      openSettingsPanel(header.getAttribute('data-panel'), e.clientX, e.clientY);
+    });
+  });
+
+  document.addEventListener('click', function() {
+    closeSettingsPanel();
+  });
+
+  document.addEventListener('contextmenu', function(e) {
+    if (!e.target.closest('.panel-header[data-panel]') && !e.target.closest('.settings-panel')) {
+      closeSettingsPanel();
+    }
   });
 
   // Initial load
