@@ -28,6 +28,32 @@
       display: block;
     }
     #log-panel { max-height: none; overflow-y: auto; }
+
+    /* Per-panel custom property overrides in popout */
+    #popout-panel .worker-card {
+      font-size: var(--panel-font-size, 13px);
+      padding: var(--panel-row-padding, 10px);
+      border-color: var(--panel-accent, #21262d);
+    }
+    #popout-panel .worker-card .worker-name { font-size: var(--panel-font-size, 13px); }
+    #popout-panel .worker-card .worker-status { font-size: calc(var(--panel-font-size, 13px) - 2px); }
+    #popout-panel .worker-task-id { color: var(--panel-accent, #58a6ff); }
+    #popout-panel .request-item {
+      font-size: var(--panel-font-size, 13px);
+      padding: var(--panel-row-padding, 10px);
+    }
+    #popout-panel .request-item .req-id { color: var(--panel-accent, #58a6ff); }
+    #popout-panel .task-item {
+      font-size: var(--panel-font-size, 13px);
+      padding: var(--panel-row-padding, 10px);
+    }
+    #popout-panel .task-id { color: var(--panel-accent, #58a6ff); }
+    #popout-panel .task-item .task-meta { font-size: calc(var(--panel-font-size, 13px) - 2px); }
+    #popout-panel .log-entry {
+      font-size: var(--panel-font-size, 12px);
+      padding: var(--panel-row-padding, 4px) 0;
+    }
+    #popout-panel .log-entry .log-actor { color: var(--panel-accent, #58a6ff); }
   </style>
 </head>
 <body>

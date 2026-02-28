@@ -78,6 +78,50 @@
     return order.map(function(k) { return colMap[k]; }).filter(Boolean);
   }
 
+  // Per-panel visual settings support
+  var DEFAULT_VISUAL_SETTINGS = {
+    workers: { fontSize: 13, accentColor: '#58a6ff', rowHeight: 'default' },
+    requests: { fontSize: 13, accentColor: '#58a6ff', rowHeight: 'default' },
+    tasks: { fontSize: 13, accentColor: '#58a6ff', rowHeight: 'default' },
+    log: { fontSize: 12, accentColor: '#58a6ff', rowHeight: 'default' },
+  };
+
+  var ROW_HEIGHT_MAP = { compact: '6px', default: '10px', comfortable: '14px' };
+  var LOG_ROW_HEIGHT_MAP = { compact: '2px', default: '4px', comfortable: '8px' };
+
+  function loadVisualSettings() {
+    try {
+      var raw = localStorage.getItem('mac10-panel-visual');
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        var result = {};
+        for (var key in DEFAULT_VISUAL_SETTINGS) {
+          result[key] = Object.assign({}, DEFAULT_VISUAL_SETTINGS[key], parsed[key] || {});
+        }
+        return result;
+      }
+    } catch (e) {}
+    return JSON.parse(JSON.stringify(DEFAULT_VISUAL_SETTINGS));
+  }
+
+  function applyPopoutVisual() {
+    var settings = loadVisualSettings();
+    var s = settings[panel];
+    if (!s) return;
+    var el = document.getElementById('popout-panel');
+    if (!el) return;
+    el.style.setProperty('--panel-font-size', s.fontSize + 'px');
+    el.style.setProperty('--panel-accent', s.accentColor);
+    var heightMap = panel === 'log' ? LOG_ROW_HEIGHT_MAP : ROW_HEIGHT_MAP;
+    el.style.setProperty('--panel-row-padding', heightMap[s.rowHeight] || heightMap['default']);
+  }
+
+  window.addEventListener('storage', function(e) {
+    if (e.key === 'mac10-panel-visual') {
+      applyPopoutVisual();
+    }
+  });
+
   var ws = null;
   var reconnectTimer = null;
   var reconnectDelay = 1000;
@@ -149,8 +193,8 @@
     workers: {
       id: function(w) { return '<div class="worker-name">Worker ' + w.id + '</div>'; },
       status: function(w) { return '<span class="worker-status badge-' + w.status + '">' + w.status + '</span>'; },
-      domain: function(w) { return w.domain ? '<div style="font-size:11px;color:#8b949e;margin-top:4px">' + escapeHtml(w.domain) + '</div>' : ''; },
-      current_task_id: function(w) { return w.current_task_id ? '<div style="font-size:11px;color:#58a6ff;margin-top:2px">Task #' + w.current_task_id + '</div>' : ''; },
+      domain: function(w) { return w.domain ? '<div class="worker-domain">' + escapeHtml(w.domain) + '</div>' : ''; },
+      current_task_id: function(w) { return w.current_task_id ? '<div class="worker-task-id">Task #' + w.current_task_id + '</div>' : ''; },
     },
     requests: {
       id: function(r) { return '<span class="req-id">' + r.id + '</span>'; },
@@ -159,7 +203,7 @@
       description: function(r) { return '<div class="req-desc">' + escapeHtml(r.description).slice(0, 200) + '</div>'; },
     },
     tasks: {
-      id: function(t) { return '<span style="color:#58a6ff">#' + t.id + '</span>'; },
+      id: function(t) { return '<span class="task-id">#' + t.id + '</span>'; },
       status: function(t) { return '<span class="worker-status badge-' + t.status + '">' + t.status + '</span>'; },
       subject: function(t) { return '<div class="task-subject">' + escapeHtml(t.subject) + '</div>'; },
       domain: function(t) { return t.domain ? '<span class="task-meta-field">[' + escapeHtml(t.domain) + ']</span>' : ''; },
@@ -186,11 +230,13 @@
     var workers = data.workers || [];
     if (workers.length === 0) {
       el.innerHTML = '<div style="color:#8b949e;font-size:13px">No workers registered</div>';
+      applyPopoutVisual();
       return;
     }
     el.innerHTML = workers.map(function(w) {
       return '<div class="worker-card">' + renderItemColumns('workers', w) + '</div>';
     }).join('');
+    applyPopoutVisual();
   }
 
   function renderRequests(data) {
@@ -198,11 +244,13 @@
     var requests = data.requests || [];
     if (requests.length === 0) {
       el.innerHTML = '<div style="color:#8b949e;font-size:13px">No requests</div>';
+      applyPopoutVisual();
       return;
     }
     el.innerHTML = requests.slice(0, 50).map(function(r) {
       return '<div class="request-item">' + renderItemColumns('requests', r) + '</div>';
     }).join('');
+    applyPopoutVisual();
   }
 
   function renderTasks(data) {
@@ -210,11 +258,13 @@
     var tasks = data.tasks || [];
     if (tasks.length === 0) {
       el.innerHTML = '<div style="color:#8b949e;font-size:13px">No tasks</div>';
+      applyPopoutVisual();
       return;
     }
     el.innerHTML = tasks.slice(0, 50).map(function(t) {
       return '<div class="task-item">' + renderItemColumns('tasks', t) + '</div>';
     }).join('');
+    applyPopoutVisual();
   }
 
   function renderLog(data) {
@@ -222,10 +272,12 @@
     var logs = data.logs || [];
     if (logs.length === 0) {
       el.innerHTML = '<div style="color:#8b949e;font-size:13px">No log entries</div>';
+      applyPopoutVisual();
       return;
     }
     el.innerHTML = logs.reverse().slice(0, 100).map(function(l) {
       return '<div class="log-entry">' + renderItemColumns('log', l) + '</div>';
     }).join('');
+    applyPopoutVisual();
   }
 })();

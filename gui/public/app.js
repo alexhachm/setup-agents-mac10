@@ -8,6 +8,92 @@
   let setupRunning = false;
   let gitPushing = false;
 
+  // --- Per-panel visual settings ---
+  const COLOR_PRESETS = [
+    { name: 'Blue', value: '#58a6ff' },
+    { name: 'Green', value: '#3fb950' },
+    { name: 'Purple', value: '#bc8cff' },
+    { name: 'Orange', value: '#d29922' },
+    { name: 'Red', value: '#f85149' },
+  ];
+
+  const ROW_HEIGHT_MAP = { compact: '6px', default: '10px', comfortable: '14px' };
+  const LOG_ROW_HEIGHT_MAP = { compact: '2px', default: '4px', comfortable: '8px' };
+
+  const DEFAULT_VISUAL_SETTINGS = {
+    workers: { fontSize: 13, accentColor: '#58a6ff', rowHeight: 'default' },
+    requests: { fontSize: 13, accentColor: '#58a6ff', rowHeight: 'default' },
+    tasks: { fontSize: 13, accentColor: '#58a6ff', rowHeight: 'default' },
+    log: { fontSize: 12, accentColor: '#58a6ff', rowHeight: 'default' },
+  };
+
+  const DEFAULT_GRID_SETTINGS = { workerWidth: 250 };
+
+  function loadVisualSettings() {
+    try {
+      const raw = localStorage.getItem('mac10-panel-visual');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const result = {};
+        for (const key in DEFAULT_VISUAL_SETTINGS) {
+          result[key] = Object.assign({}, DEFAULT_VISUAL_SETTINGS[key], parsed[key] || {});
+        }
+        return result;
+      }
+    } catch (e) {}
+    return JSON.parse(JSON.stringify(DEFAULT_VISUAL_SETTINGS));
+  }
+
+  function saveVisualSettings(settings) {
+    localStorage.setItem('mac10-panel-visual', JSON.stringify(settings));
+  }
+
+  function loadGridSettings() {
+    try {
+      const raw = localStorage.getItem('mac10-grid-settings');
+      if (raw) return Object.assign({}, DEFAULT_GRID_SETTINGS, JSON.parse(raw));
+    } catch (e) {}
+    return Object.assign({}, DEFAULT_GRID_SETTINGS);
+  }
+
+  function saveGridSettings(settings) {
+    localStorage.setItem('mac10-grid-settings', JSON.stringify(settings));
+  }
+
+  const PANEL_ID_MAP = {
+    workers: 'workers-panel',
+    requests: 'requests-panel',
+    tasks: 'tasks-panel',
+    log: 'log-panel',
+  };
+
+  function applyPanelVisual(panelName) {
+    const settings = loadVisualSettings();
+    const s = settings[panelName];
+    if (!s) return;
+    const el = document.getElementById(PANEL_ID_MAP[panelName]);
+    if (!el) return;
+    el.style.setProperty('--panel-font-size', s.fontSize + 'px');
+    el.style.setProperty('--panel-accent', s.accentColor);
+    const heightMap = panelName === 'log' ? LOG_ROW_HEIGHT_MAP : ROW_HEIGHT_MAP;
+    el.style.setProperty('--panel-row-padding', heightMap[s.rowHeight] || heightMap['default']);
+  }
+
+  function applyAllVisualSettings() {
+    for (const name in PANEL_ID_MAP) {
+      applyPanelVisual(name);
+    }
+    applyGridSettings();
+  }
+
+  function applyGridSettings() {
+    const gs = loadGridSettings();
+    const gridEl = document.querySelector('.grid');
+    if (gridEl) {
+      gridEl.style.gridTemplateColumns = gs.workerWidth + 'px 1fr 1fr';
+    }
+  }
+
   // --- Column definitions per panel ---
   const PANEL_COLUMNS = {
     workers: [
@@ -120,8 +206,8 @@
     workers: {
       id: (w) => `<div class="worker-name">Worker ${w.id}</div>`,
       status: (w) => `<span class="worker-status badge-${w.status}">${w.status}</span>`,
-      domain: (w) => w.domain ? `<div style="font-size:11px;color:#8b949e;margin-top:4px">${escapeHtml(w.domain)}</div>` : '',
-      current_task_id: (w) => w.current_task_id ? `<div style="font-size:11px;color:#58a6ff;margin-top:2px">Task #${w.current_task_id}</div>` : '',
+      domain: (w) => w.domain ? `<div class="worker-domain">${escapeHtml(w.domain)}</div>` : '',
+      current_task_id: (w) => w.current_task_id ? `<div class="worker-task-id">Task #${w.current_task_id}</div>` : '',
     },
     requests: {
       id: (r) => `<span class="req-id">${r.id}</span>`,
@@ -130,7 +216,7 @@
       description: (r) => `<div class="req-desc">${escapeHtml(r.description).slice(0, 100)}</div>`,
     },
     tasks: {
-      id: (t) => `<span style="color:#58a6ff">#${t.id}</span>`,
+      id: (t) => `<span class="task-id">#${t.id}</span>`,
       status: (t) => `<span class="worker-status badge-${t.status}">${t.status}</span>`,
       subject: (t) => `<div class="task-subject">${escapeHtml(t.subject)}</div>`,
       domain: (t) => t.domain ? `<span class="task-meta-field">[${escapeHtml(t.domain)}]</span>` : '',
@@ -522,6 +608,123 @@
     titleEl.textContent = titles[panelName] || panelName;
 
     itemsEl.innerHTML = '';
+    const vs = loadVisualSettings();
+    const ps = vs[panelName];
+
+    // --- Font Size ---
+    const fontLabel = document.createElement('div');
+    fontLabel.className = 'settings-panel-label';
+    fontLabel.textContent = 'Font Size';
+    itemsEl.appendChild(fontLabel);
+
+    const fontRow = document.createElement('div');
+    fontRow.className = 'settings-panel-row';
+    const fontSlider = document.createElement('input');
+    fontSlider.type = 'range';
+    fontSlider.min = '10';
+    fontSlider.max = '18';
+    fontSlider.value = ps.fontSize;
+    const fontValue = document.createElement('span');
+    fontValue.className = 'settings-value';
+    fontValue.textContent = ps.fontSize + 'px';
+    fontSlider.addEventListener('input', function() {
+      fontValue.textContent = fontSlider.value + 'px';
+      const s = loadVisualSettings();
+      s[panelName].fontSize = parseInt(fontSlider.value);
+      saveVisualSettings(s);
+      applyPanelVisual(panelName);
+    });
+    fontRow.appendChild(fontSlider);
+    fontRow.appendChild(fontValue);
+    itemsEl.appendChild(fontRow);
+
+    // --- Accent Color ---
+    const colorLabel = document.createElement('div');
+    colorLabel.className = 'settings-panel-label';
+    colorLabel.textContent = 'Accent Color';
+    itemsEl.appendChild(colorLabel);
+
+    const colorRow = document.createElement('div');
+    colorRow.className = 'settings-color-swatches';
+    COLOR_PRESETS.forEach(function(preset) {
+      const swatch = document.createElement('div');
+      swatch.className = 'settings-color-swatch' + (ps.accentColor === preset.value ? ' active' : '');
+      swatch.style.background = preset.value;
+      swatch.title = preset.name;
+      swatch.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const s = loadVisualSettings();
+        s[panelName].accentColor = preset.value;
+        saveVisualSettings(s);
+        applyPanelVisual(panelName);
+        colorRow.querySelectorAll('.settings-color-swatch').forEach(function(sw) {
+          sw.classList.toggle('active', sw === swatch);
+        });
+      });
+      colorRow.appendChild(swatch);
+    });
+    itemsEl.appendChild(colorRow);
+
+    // --- Row Height ---
+    const heightLabel = document.createElement('div');
+    heightLabel.className = 'settings-panel-label';
+    heightLabel.textContent = 'Row Height';
+    itemsEl.appendChild(heightLabel);
+
+    const heightRow = document.createElement('div');
+    heightRow.className = 'settings-row-height-btns';
+    ['compact', 'default', 'comfortable'].forEach(function(h) {
+      const btn = document.createElement('button');
+      btn.className = 'settings-row-height-btn' + (ps.rowHeight === h ? ' active' : '');
+      btn.textContent = h.charAt(0).toUpperCase() + h.slice(1);
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const s = loadVisualSettings();
+        s[panelName].rowHeight = h;
+        saveVisualSettings(s);
+        applyPanelVisual(panelName);
+        heightRow.querySelectorAll('.settings-row-height-btn').forEach(function(b) {
+          b.classList.toggle('active', b === btn);
+        });
+      });
+      heightRow.appendChild(btn);
+    });
+    itemsEl.appendChild(heightRow);
+
+    // --- Column Width (Workers panel width slider) ---
+    if (panelName === 'workers' || panelName === 'requests' || panelName === 'tasks') {
+      const gs = loadGridSettings();
+      const colLabel = document.createElement('div');
+      colLabel.className = 'settings-panel-label';
+      colLabel.textContent = 'Workers Column Width';
+      itemsEl.appendChild(colLabel);
+
+      const colRow = document.createElement('div');
+      colRow.className = 'settings-panel-row';
+      const colSlider = document.createElement('input');
+      colSlider.type = 'range';
+      colSlider.min = '150';
+      colSlider.max = '450';
+      colSlider.value = gs.workerWidth;
+      const colValue = document.createElement('span');
+      colValue.className = 'settings-value';
+      colValue.textContent = gs.workerWidth + 'px';
+      colSlider.addEventListener('input', function() {
+        colValue.textContent = colSlider.value + 'px';
+        const g = loadGridSettings();
+        g.workerWidth = parseInt(colSlider.value);
+        saveGridSettings(g);
+        applyGridSettings();
+      });
+      colRow.appendChild(colSlider);
+      colRow.appendChild(colValue);
+      itemsEl.appendChild(colRow);
+    }
+
+    // --- Divider ---
+    const divider1 = document.createElement('div');
+    divider1.className = 'settings-panel-divider';
+    itemsEl.appendChild(divider1);
 
     // Configure columns option
     const columnsItem = document.createElement('div');
@@ -533,22 +736,7 @@
     });
     itemsEl.appendChild(columnsItem);
 
-    // Reset column order option
-    const resetItem = document.createElement('div');
-    resetItem.className = 'settings-panel-item';
-    resetItem.innerHTML = '<span class="settings-icon">&#8634;</span> Reset column order';
-    resetItem.addEventListener('click', function() {
-      saveColumnOrder(panelName, PANEL_COLUMNS[panelName].map(c => c.key));
-      closeSettingsPanel();
-      fetchStatus();
-    });
-    itemsEl.appendChild(resetItem);
-
-    // Divider
-    const divider = document.createElement('div');
-    divider.className = 'settings-panel-divider';
-    itemsEl.appendChild(divider);
-
+    // Popout
     const popoutItem = document.createElement('div');
     popoutItem.className = 'settings-panel-item';
     popoutItem.innerHTML = '<span class="settings-icon">&#8599;</span> Open in new window';
@@ -562,13 +750,35 @@
     });
     itemsEl.appendChild(popoutItem);
 
+    // --- Reset ---
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'settings-reset-btn';
+    resetBtn.textContent = 'Reset to Defaults';
+    resetBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const s = loadVisualSettings();
+      s[panelName] = Object.assign({}, DEFAULT_VISUAL_SETTINGS[panelName]);
+      saveVisualSettings(s);
+      saveColumnOrder(panelName, PANEL_COLUMNS[panelName].map(c => c.key));
+      if (panelName === 'workers') {
+        saveGridSettings(Object.assign({}, DEFAULT_GRID_SETTINGS));
+        applyGridSettings();
+      }
+      applyPanelVisual(panelName);
+      fetchStatus();
+      openSettingsPanel(panelName, parseInt(settingsPanel.style.left), parseInt(settingsPanel.style.top));
+    });
+    itemsEl.appendChild(resetBtn);
+
     settingsPanel.style.display = '';
-    // Position within viewport bounds
-    const rect = settingsPanel.getBoundingClientRect();
-    const maxX = window.innerWidth - rect.width - 8;
-    const maxY = window.innerHeight - rect.height - 8;
-    settingsPanel.style.left = Math.min(x, maxX) + 'px';
-    settingsPanel.style.top = Math.min(y, maxY) + 'px';
+    // Position within viewport bounds — measure after content rendered
+    requestAnimationFrame(function() {
+      const rect = settingsPanel.getBoundingClientRect();
+      const maxX = window.innerWidth - rect.width - 8;
+      const maxY = window.innerHeight - rect.height - 8;
+      settingsPanel.style.left = Math.max(0, Math.min(x, maxX)) + 'px';
+      settingsPanel.style.top = Math.max(0, Math.min(y, maxY)) + 'px';
+    });
   }
 
   function closeSettingsPanel() {
@@ -693,4 +903,5 @@
   fetchConfig();
   fetchStatus();
   connect();
+  applyAllVisualSettings();
 })();
