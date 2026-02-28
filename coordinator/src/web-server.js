@@ -134,8 +134,59 @@ function start(projectDir, port = 3100, scriptDir = null) {
       if (numWorkers !== undefined) {
         db.setConfig('num_workers', String(Math.min(Math.max(parseInt(numWorkers) || 4, 1), 8)));
       }
+      // Auto-save as preset when both project dir and repo are set
+      const dir = newDir || db.getConfig('project_dir');
+      const repo = githubRepo !== undefined ? githubRepo : db.getConfig('github_repo');
+      const workers = numWorkers !== undefined ? Math.min(Math.max(parseInt(numWorkers) || 4, 1), 8) : parseInt(db.getConfig('num_workers') || '4');
+      if (dir && repo) {
+        const presetName = repo || path.basename(dir);
+        db.savePreset(presetName, dir, repo, workers);
+      }
       db.log('gui', 'config_updated', { projectDir: newDir, githubRepo, numWorkers });
       res.json({ ok: true, message: 'Config saved. Relaunch masters to apply.' });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // --- Preset endpoints ---
+
+  app.get('/api/presets', (req, res) => {
+    try {
+      res.json(db.listPresets());
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/presets', (req, res) => {
+    try {
+      const { name, projectDir: dir, githubRepo, numWorkers } = req.body;
+      if (!name || !dir) {
+        return res.status(400).json({ ok: false, error: 'name and projectDir are required' });
+      }
+      if (!SAFE_PATH_RE.test(dir)) {
+        return res.status(400).json({ ok: false, error: 'Invalid project directory path' });
+      }
+      if (githubRepo && !REPO_RE.test(githubRepo)) {
+        return res.status(400).json({ ok: false, error: 'Invalid GitHub repo format' });
+      }
+      db.savePreset(name, dir, githubRepo || '', parseInt(numWorkers) || 4);
+      db.log('gui', 'preset_saved', { name, projectDir: dir, githubRepo });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.delete('/api/presets/:id', (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!id) return res.status(400).json({ ok: false, error: 'Invalid preset id' });
+      const deleted = db.deletePreset(id);
+      if (!deleted) return res.status(404).json({ ok: false, error: 'Preset not found' });
+      db.log('gui', 'preset_deleted', { id });
+      res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
@@ -213,7 +264,16 @@ function start(projectDir, port = 3100, scriptDir = null) {
       if (errBuffer) broadcast({ type: 'setup_log', line: '[stderr] ' + errBuffer });
 
       if (code === 0) {
-        try { db.setConfig('setup_complete', '1'); } catch {}
+        try {
+          db.setConfig('setup_complete', '1');
+          // Auto-save as preset on successful setup
+          const dir = db.getConfig('project_dir');
+          const repo = db.getConfig('github_repo');
+          const w = parseInt(db.getConfig('num_workers') || '4');
+          if (dir && repo) {
+            db.savePreset(repo || path.basename(dir), dir, repo, w);
+          }
+        } catch {}
       }
       db.log('gui', 'setup_finished', { code });
       broadcast({ type: 'setup_complete', code: code || 0 });

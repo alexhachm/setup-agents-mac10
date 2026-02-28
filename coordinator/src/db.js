@@ -286,6 +286,12 @@ function checkMailBlocking(recipient, timeoutMs = 300000, pollMs = 1000) {
 // --- Merge queue helpers ---
 
 function enqueueMerge({ request_id, task_id, pr_url, branch, priority }) {
+  // Skip if any entry already exists for this PR URL (prevents infinite merge-conflict loop)
+  const existing = getDb().prepare(`
+    SELECT id FROM merge_queue WHERE pr_url = ?
+  `).get(pr_url);
+  if (existing) return;
+
   getDb().prepare(`
     INSERT INTO merge_queue (request_id, task_id, pr_url, branch, priority)
     VALUES (?, ?, ?, ?, ?)
@@ -337,6 +343,33 @@ function setConfig(key, value) {
   getDb().prepare('INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)').run(key, String(value));
 }
 
+// --- Preset helpers ---
+
+function savePreset(name, projectDir, githubRepo, numWorkers) {
+  getDb().prepare(`
+    INSERT INTO presets (name, project_dir, github_repo, num_workers)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+      project_dir = excluded.project_dir,
+      github_repo = excluded.github_repo,
+      num_workers = excluded.num_workers,
+      updated_at = datetime('now')
+  `).run(name, projectDir, githubRepo || '', numWorkers || 4);
+}
+
+function listPresets() {
+  return getDb().prepare('SELECT * FROM presets ORDER BY updated_at DESC').all();
+}
+
+function getPreset(id) {
+  return getDb().prepare('SELECT * FROM presets WHERE id = ?').get(id);
+}
+
+function deletePreset(id) {
+  const result = getDb().prepare('DELETE FROM presets WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
 module.exports = {
   init, close, getDb,
   createRequest, getRequest, updateRequest, listRequests,
@@ -346,4 +379,5 @@ module.exports = {
   enqueueMerge, getNextMerge, updateMerge,
   log, getLog,
   getConfig, setConfig,
+  savePreset, listPresets, getPreset, deletePreset,
 };

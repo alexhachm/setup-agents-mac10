@@ -150,6 +150,64 @@
     return `<a href="${safe}" target="_blank" rel="noopener" style="color:#58a6ff">PR</a>`;
   }
 
+  // --- Presets ---
+
+  let presets = [];
+
+  function fetchPresets() {
+    fetch('/api/presets')
+      .then(r => r.json())
+      .then(data => {
+        presets = data;
+        renderPresets();
+      })
+      .catch(err => console.error('Presets fetch failed:', err));
+  }
+
+  function renderPresets() {
+    const sel = document.getElementById('preset-select');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">-- New --</option>';
+    presets.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = String(p.id);
+      opt.textContent = p.name;
+      sel.appendChild(opt);
+    });
+    // Restore selection if still exists
+    if (current && sel.querySelector(`option[value="${current}"]`)) {
+      sel.value = current;
+    }
+    document.getElementById('preset-delete-btn').disabled = !sel.value;
+  }
+
+  document.getElementById('preset-select').addEventListener('change', (e) => {
+    const id = e.target.value;
+    document.getElementById('preset-delete-btn').disabled = !id;
+    if (!id) return;
+    const preset = presets.find(p => String(p.id) === id);
+    if (!preset) return;
+    document.getElementById('project-dir').value = preset.project_dir;
+    document.getElementById('github-repo').value = preset.github_repo;
+    document.getElementById('worker-count').value = preset.num_workers;
+  });
+
+  document.getElementById('preset-delete-btn').addEventListener('click', () => {
+    const sel = document.getElementById('preset-select');
+    const id = sel.value;
+    if (!id) return;
+    if (!confirm('Delete this preset?')) return;
+    fetch('/api/presets/' + id, { method: 'DELETE' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          sel.value = '';
+          fetchPresets();
+        }
+      })
+      .catch(err => console.error('Preset delete failed:', err));
+  });
+
   // --- Setup panel ---
 
   function fetchConfig() {
@@ -212,6 +270,7 @@
       appendSetupLog('\n--- Setup finished successfully ---');
       // Refresh state after setup
       fetchStatus();
+      fetchPresets();
       // Show toggle button so panel can be collapsed
       const toggleBtn = document.getElementById('setup-toggle');
       toggleBtn.style.display = '';
@@ -251,6 +310,8 @@
         // Update git panel label
         document.getElementById('git-repo-label').textContent = githubRepo;
         if (githubRepo) document.getElementById('git-push-btn').disabled = false;
+        // Refresh presets (auto-saved on backend)
+        fetchPresets();
       } else {
         msg.textContent = data.error || 'Save failed';
         msg.style.color = '#f85149';
@@ -492,6 +553,7 @@
 
   // Initial load
   fetchConfig();
+  fetchPresets();
   fetchStatus();
   connect();
 })();

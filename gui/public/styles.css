@@ -215,6 +215,38 @@ h2 {
 
 .setup-field input[type="number"]:focus { border-color: #58a6ff; outline: none; }
 
+.preset-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.preset-row select {
+  padding: 10px 16px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  font-size: 14px;
+  min-width: 180px;
+}
+
+.preset-row select:focus { border-color: #58a6ff; outline: none; }
+
+#preset-delete-btn {
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #f85149;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+#preset-delete-btn:disabled { opacity: 0.3; cursor: default; }
+#preset-delete-btn:not(:disabled):hover { background: #f8514922; }
+
 .setup-buttons {
   display: flex;
   gap: 8px;

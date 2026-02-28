@@ -101,6 +101,17 @@ CREATE TABLE IF NOT EXISTS config (
   value TEXT NOT NULL
 );
 
+-- Presets (saved project+repo combos)
+CREATE TABLE IF NOT EXISTS presets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  project_dir TEXT NOT NULL,
+  github_repo TEXT NOT NULL DEFAULT '',
+  num_workers INTEGER NOT NULL DEFAULT 4,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_request ON tasks(request_id);

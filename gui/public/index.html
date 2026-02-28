@@ -23,6 +23,13 @@
       <div id="setup-body">
         <div id="setup-form">
           <div class="setup-field">
+            <label for="preset-select">Preset</label>
+            <div class="preset-row">
+              <select id="preset-select"><option value="">-- New --</option></select>
+              <button id="preset-delete-btn" title="Delete selected preset" disabled>&times;</button>
+            </div>
+          </div>
+          <div class="setup-field">
             <label for="project-dir">Project Directory</label>
             <input type="text" id="project-dir" placeholder="/path/to/your-project" />
           </div>
