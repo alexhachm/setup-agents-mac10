@@ -7,6 +7,9 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const db = require('./db');
+const hotkeyManager = require('./hotkey-manager');
+const { parse, validate } = require('./script-parser');
+const { execute } = require('./script-executor');
 
 const REPO_RE = /^(https?:\/\/github\.com\/)?[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+(\.git)?$/;
 const SAFE_PATH_RE = /^\/[a-zA-Z0-9._\/ -]+$/;
@@ -380,6 +383,169 @@ function start(projectDir, port = 3100, scriptDir = null) {
     });
 
     res.json({ ok: true, message: 'Push started' });
+  });
+
+  // --- Hotkey scripting API ---
+
+  // Ensure hotkey schema exists
+  try { hotkeyManager.ensureSchema(db.getDb()); } catch {}
+
+  // List hotkeys for a profile
+  app.get('/api/hotkeys', (req, res) => {
+    try {
+      const profile = req.query.profile || 'default';
+      const hotkeys = hotkeyManager.listHotkeys(db.getDb(), profile);
+      res.json(hotkeys);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // List all profiles
+  app.get('/api/hotkeys/profiles', (req, res) => {
+    try {
+      res.json(hotkeyManager.listProfiles(db.getDb()));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Get a single hotkey
+  app.get('/api/hotkeys/:id', (req, res) => {
+    try {
+      const hotkey = hotkeyManager.getHotkey(db.getDb(), parseInt(req.params.id, 10));
+      if (!hotkey) return res.status(404).json({ error: 'Hotkey not found' });
+      res.json(hotkey);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Create a new hotkey
+  app.post('/api/hotkeys', (req, res) => {
+    try {
+      const { name, keyCombo, script, profile, description } = req.body;
+      if (!name || !keyCombo || !script) {
+        return res.status(400).json({ error: 'name, keyCombo, and script are required' });
+      }
+      const result = hotkeyManager.createHotkey(db.getDb(), { name, keyCombo, script, profile, description });
+      if (result.errors.length > 0) {
+        return res.status(400).json({ ok: false, errors: result.errors, warnings: result.warnings });
+      }
+      db.log('gui', 'hotkey_created', { id: result.id, name, keyCombo });
+      res.json({ ok: true, id: result.id, warnings: result.warnings });
+    } catch (e) {
+      if (e.message && e.message.includes('UNIQUE constraint')) {
+        return res.status(409).json({ error: 'A hotkey with that key combination already exists in this profile' });
+      }
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Update a hotkey
+  app.put('/api/hotkeys/:id', (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const result = hotkeyManager.updateHotkey(db.getDb(), id, req.body);
+      if (!result.success) {
+        return res.status(400).json({ ok: false, errors: result.errors });
+      }
+      db.log('gui', 'hotkey_updated', { id });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Delete a hotkey
+  app.delete('/api/hotkeys/:id', (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const deleted = hotkeyManager.deleteHotkey(db.getDb(), id);
+      if (!deleted) return res.status(404).json({ error: 'Hotkey not found' });
+      db.log('gui', 'hotkey_deleted', { id });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Trigger a hotkey (execute its script)
+  app.post('/api/hotkeys/trigger', (req, res) => {
+    try {
+      const { keyCombo, marketContext, profile } = req.body;
+      if (!keyCombo) {
+        return res.status(400).json({ error: 'keyCombo is required' });
+      }
+      const result = hotkeyManager.triggerHotkey(db.getDb(), keyCombo, marketContext || {}, profile || 'default');
+      if (!result.found) {
+        return res.status(404).json({ error: 'No hotkey bound to that key combination' });
+      }
+      db.log('gui', 'hotkey_triggered', { keyCombo, hotkeyId: result.hotkey.id, name: result.hotkey.name });
+      // Broadcast execution event via WebSocket
+      broadcast({
+        type: 'hotkey_executed',
+        hotkey: result.hotkey,
+        result: result.result,
+      });
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Parse/validate a script without executing (for editor feedback)
+  app.post('/api/hotkeys/validate', (req, res) => {
+    try {
+      const { script } = req.body;
+      if (!script) {
+        return res.status(400).json({ error: 'script is required' });
+      }
+      const { commands, errors } = parse(script);
+      const warnings = errors.length === 0 ? validate(commands) : [];
+      res.json({ valid: errors.length === 0, commands: commands.length, errors, warnings });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Dry-run a script (parse + execute with mock context)
+  app.post('/api/hotkeys/dry-run', (req, res) => {
+    try {
+      const { script, marketContext } = req.body;
+      if (!script) {
+        return res.status(400).json({ error: 'script is required' });
+      }
+      const result = execute(script, marketContext || {});
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Import hotkeys from JSON
+  app.post('/api/hotkeys/import', (req, res) => {
+    try {
+      const { hotkeys, profile } = req.body;
+      if (!Array.isArray(hotkeys)) {
+        return res.status(400).json({ error: 'hotkeys must be an array' });
+      }
+      const results = hotkeyManager.importHotkeys(db.getDb(), hotkeys, profile || 'default');
+      db.log('gui', 'hotkeys_imported', { count: hotkeys.length, profile: profile || 'default' });
+      res.json({ ok: true, results });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Export hotkeys as JSON
+  app.get('/api/hotkeys/export/:profile', (req, res) => {
+    try {
+      const exported = hotkeyManager.exportHotkeys(db.getDb(), req.params.profile);
+      res.json(exported);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // WebSocket for live updates
