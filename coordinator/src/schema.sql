@@ -116,11 +116,16 @@ CREATE TABLE IF NOT EXISTS presets (
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_request ON tasks(request_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_tasks_request_status ON tasks(request_id, status);
 CREATE INDEX IF NOT EXISTS idx_mail_recipient ON mail(recipient, consumed);
 CREATE INDEX IF NOT EXISTS idx_mail_type ON mail(type);
+CREATE INDEX IF NOT EXISTS idx_mail_created ON mail(created_at);
 CREATE INDEX IF NOT EXISTS idx_merge_queue_status ON merge_queue(status);
+CREATE INDEX IF NOT EXISTS idx_merge_queue_request ON merge_queue(request_id, status);
 CREATE INDEX IF NOT EXISTS idx_activity_actor ON activity_log(actor);
+CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status);
+CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 
 -- Default config
 INSERT OR IGNORE INTO config (key, value) VALUES

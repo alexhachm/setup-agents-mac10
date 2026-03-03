@@ -40,6 +40,9 @@ const COMMAND_SCHEMAS = {
   'register-worker':   { required: ['worker_id'], types: { worker_id: 'string', worktree_path: 'string', branch: 'string' } },
   'repair':            { required: [], types: {} },
   'ping':              { required: [], types: {} },
+  'add-worker':        { required: [], types: {} },
+  'merge-status':      { required: [], types: { request_id: 'string' } },
+  'reset-worker':      { required: ['worker_id'], types: { worker_id: 'string' } },
 };
 
 function validateCommand(cmd) {
@@ -177,7 +180,11 @@ function handleCommand(cmd, conn, handlers) {
         const requests = db.listRequests();
         const workers = db.getAllWorkers();
         const tasks = db.listTasks();
-        respond(conn, { ok: true, requests, workers, tasks });
+        const project_dir = db.getConfig('project_dir') || '';
+        const merges = db.getDb().prepare(
+          "SELECT * FROM merge_queue WHERE status != 'merged' ORDER BY id DESC"
+        ).all();
+        respond(conn, { ok: true, requests, workers, tasks, project_dir, merges });
         break;
       }
       case 'clarify': {
@@ -273,9 +280,10 @@ function handleCommand(cmd, conn, handlers) {
           current_task_id: null,
           tasks_completed: tasksCompleted,
         });
-        // Enqueue merge if PR exists
+        // Enqueue merge if PR exists (must be a valid URL, not a status string like "already_merged")
         const completedTask = db.getTask(task_id);
-        if (pr_url) {
+        const isValidPrUrl = pr_url && /^https:\/\//.test(pr_url);
+        if (isValidPrUrl) {
           db.enqueueMerge({
             request_id: completedTask.request_id,
             task_id,
@@ -415,8 +423,18 @@ function handleCommand(cmd, conn, handlers) {
         });
         db.log('allocator', 'task_assigned', { task_id: assignTaskId, worker_id: assignWorkerId, domain: assignedTask.domain });
 
-        // Trigger tmux spawn via handler
-        if (handlers.onAssignTask) handlers.onAssignTask(assignedTask, db.getWorker(assignWorkerId));
+        // Trigger tmux spawn via handler — revert assignment on failure
+        if (handlers.onAssignTask) {
+          try {
+            handlers.onAssignTask(assignedTask, db.getWorker(assignWorkerId));
+          } catch (spawnErr) {
+            db.updateTask(assignTaskId, { status: 'ready', assigned_to: null });
+            db.updateWorker(assignWorkerId, { status: 'idle', current_task_id: null, launched_at: null });
+            db.log('coordinator', 'assign_handler_failed', { task_id: assignTaskId, worker_id: assignWorkerId, error: spawnErr.message });
+            respond(conn, { ok: false, error: `Failed to spawn worker: ${spawnErr.message}` });
+            break;
+          }
+        }
 
         respond(conn, { ok: true, task_id: assignTaskId, worker_id: assignWorkerId });
         break;
@@ -442,6 +460,40 @@ function handleCommand(cmd, conn, handlers) {
         break;
       }
 
+      case 'integrate': {
+        // Master-3 triggers integration when all tasks for a request complete
+        const reqId = args.request_id;
+        const completion = db.checkRequestCompletion(reqId);
+        if (!completion.all_done) {
+          respond(conn, { ok: false, error: 'Not all tasks completed', ...completion });
+          break;
+        }
+        // Queue merges for each completed task's branch/PR
+        const tasks = db.listTasks({ request_id: reqId, status: 'completed' });
+        let queued = 0;
+        for (const task of tasks) {
+          if (task.pr_url && task.branch) {
+            try {
+              db.enqueueMerge({
+                request_id: reqId,
+                task_id: task.id,
+                branch: task.branch,
+                pr_url: task.pr_url,
+              });
+              queued++;
+            } catch (e) {
+              // Already queued or other error — skip
+            }
+          }
+        }
+        db.updateRequest(reqId, { status: 'integrating' });
+        db.log('coordinator', 'integration_triggered', { request_id: reqId, merges_queued: queued });
+        // Trigger merger immediately
+        if (handlers.onIntegrate) handlers.onIntegrate(reqId);
+        respond(conn, { ok: true, request_id: reqId, merges_queued: queued });
+        break;
+      }
+
       // === SYSTEM commands ===
       case 'register-worker': {
         const { worker_id, worktree_path, branch } = args;
@@ -461,6 +513,125 @@ function handleCommand(cmd, conn, handlers) {
       }
       case 'ping': {
         respond(conn, { ok: true, ts: Date.now() });
+        break;
+      }
+
+      case 'add-worker': {
+        const maxWorkers = parseInt(db.getConfig('max_workers')) || 8;
+        const allWorkers = db.getAllWorkers();
+        if (allWorkers.length >= maxWorkers) {
+          respond(conn, { ok: false, error: `Already at max workers (${maxWorkers})` });
+          break;
+        }
+        const nextId = allWorkers.length > 0
+          ? Math.max(...allWorkers.map(w => typeof w.id === 'number' ? w.id : parseInt(w.id))) + 1
+          : 1;
+        if (nextId > maxWorkers) {
+          respond(conn, { ok: false, error: `Next worker ID ${nextId} exceeds max_workers (${maxWorkers})` });
+          break;
+        }
+        const projDir = db.getConfig('project_dir');
+        if (!projDir) {
+          respond(conn, { ok: false, error: 'project_dir not set in config' });
+          break;
+        }
+        const { execFileSync } = require('child_process');
+        const wtDir = path.join(projDir, '.worktrees');
+        const wtPath = path.join(wtDir, `wt-${nextId}`);
+        const branchName = `agent-${nextId}`;
+        try {
+          fs.mkdirSync(wtDir, { recursive: true });
+          // Create branch from main
+          const mainBranch = (() => {
+            try {
+              return execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: projDir, encoding: 'utf8' }).trim();
+            } catch { return 'main'; }
+          })();
+          try {
+            execFileSync('git', ['branch', branchName, mainBranch], { cwd: projDir, encoding: 'utf8' });
+          } catch {} // branch may already exist
+          execFileSync('git', ['worktree', 'add', wtPath, branchName], { cwd: projDir, encoding: 'utf8' });
+
+          // Copy .claude structure to worktree
+          const srcClaude = path.join(projDir, '.claude');
+          const dstClaude = path.join(wtPath, '.claude');
+          const copyDir = (rel) => {
+            const src = path.join(srcClaude, rel);
+            const dst = path.join(dstClaude, rel);
+            if (!fs.existsSync(src)) return;
+            fs.mkdirSync(dst, { recursive: true });
+            for (const f of fs.readdirSync(src)) {
+              const srcF = path.join(src, f);
+              if (fs.statSync(srcF).isFile()) fs.copyFileSync(srcF, path.join(dst, f));
+            }
+          };
+          copyDir('commands');
+          copyDir('knowledge');
+          copyDir('knowledge/domain');
+          copyDir('scripts');
+          copyDir('agents');
+          copyDir('hooks');
+          // Copy worker CLAUDE.md
+          const workerClaude = path.join(srcClaude, 'worker-claude.md');
+          if (fs.existsSync(workerClaude)) {
+            fs.copyFileSync(workerClaude, path.join(wtPath, 'CLAUDE.md'));
+          }
+          // Copy settings.json
+          const settingsFile = path.join(srcClaude, 'settings.json');
+          if (fs.existsSync(settingsFile)) {
+            fs.copyFileSync(settingsFile, path.join(dstClaude, 'settings.json'));
+          }
+          // Make hook scripts executable
+          try {
+            const hookDir = path.join(dstClaude, 'hooks');
+            if (fs.existsSync(hookDir)) {
+              for (const f of fs.readdirSync(hookDir)) {
+                if (f.endsWith('.sh')) fs.chmodSync(path.join(hookDir, f), 0o755);
+              }
+            }
+          } catch {}
+
+          db.registerWorker(nextId, wtPath, branchName);
+          db.log('coordinator', 'worker_added', { worker_id: nextId, worktree_path: wtPath, branch: branchName });
+          respond(conn, { ok: true, worker_id: nextId, worktree_path: wtPath, branch: branchName });
+        } catch (e) {
+          respond(conn, { ok: false, error: `Failed to create worker: ${e.message}` });
+        }
+        break;
+      }
+
+      case 'reset-worker': {
+        // Called by sentinel when Claude exits — resets worker to idle
+        const resetWid = args.worker_id;
+        const resetWorker = db.getWorker(resetWid);
+        if (!resetWorker) {
+          respond(conn, { ok: false, error: 'Worker not found' });
+          break;
+        }
+        // Only reset if worker isn't already idle (avoid clobbering a fresh assignment)
+        if (resetWorker.status !== 'idle') {
+          db.updateWorker(resetWid, {
+            status: 'idle',
+            current_task_id: null,
+            last_heartbeat: new Date().toISOString(),
+          });
+          db.log(`worker-${resetWid}`, 'sentinel_reset', { previous_status: resetWorker.status });
+        }
+        respond(conn, { ok: true });
+        break;
+      }
+
+      case 'merge-status': {
+        const reqFilter = args && args.request_id;
+        let sql = 'SELECT * FROM merge_queue';
+        const params = [];
+        if (reqFilter) {
+          sql += ' WHERE request_id = ?';
+          params.push(reqFilter);
+        }
+        sql += ' ORDER BY id DESC';
+        const merges = db.getDb().prepare(sql).all(...params);
+        respond(conn, { ok: true, merges });
         break;
       }
 

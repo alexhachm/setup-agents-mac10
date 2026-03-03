@@ -14,11 +14,19 @@ const SAFE_PATH_RE = /^\/[a-zA-Z0-9._\/ -]+$/;
 let server = null;
 let wss = null;
 let setupProcess = null;
+let broadcastIntervalId = null;
 
 function start(projectDir, port = 3100, scriptDir = null) {
   const app = express();
   server = http.createServer(app);
   wss = new WebSocket.Server({ server });
+  wss.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      // Handled by server.on('error') — suppress duplicate
+    } else {
+      console.error(`WebSocket server error: ${err.message}`);
+    }
+  });
 
   // Resolve scriptDir (mac10 repo root containing setup.sh)
   const resolvedScriptDir = scriptDir || path.join(__dirname, '..', '..');
@@ -458,7 +466,7 @@ function start(projectDir, port = 3100, scriptDir = null) {
   });
 
   // Periodic broadcast of state
-  setInterval(() => {
+  broadcastIntervalId = setInterval(() => {
     broadcast({
       type: 'state',
       data: {
@@ -469,8 +477,17 @@ function start(projectDir, port = 3100, scriptDir = null) {
     });
   }, 2000);
 
-  server.listen(port, () => {
-    db.log('coordinator', 'web_server_started', { port });
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`WARNING: Port ${port} already in use — web dashboard not started. Coordinator continues without GUI.`);
+      db.log('coordinator', 'web_server_port_conflict', { port, error: err.message });
+    } else {
+      console.error(`Web server error: ${err.message}`);
+    }
+  });
+
+  server.listen(port, '127.0.0.1', () => {
+    db.log('coordinator', 'web_server_started', { port, host: '127.0.0.1' });
   });
 
   return server;
@@ -487,6 +504,7 @@ function broadcast(data) {
 }
 
 function stop() {
+  if (broadcastIntervalId) { clearInterval(broadcastIntervalId); broadcastIntervalId = null; }
   if (setupProcess) {
     try { setupProcess.kill(); } catch {}
     setupProcess = null;

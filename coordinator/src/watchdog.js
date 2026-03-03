@@ -85,12 +85,22 @@ function tick(projectDir) {
   // Orphan task recovery: tasks assigned but worker is idle
   recoverOrphanTasks();
 
-  // Periodic mail purge (once per hour)
+  // Recover stale integrations
+  recoverStaleIntegrations(now);
+
+  // Periodic mail + log purge (once per hour)
   if (now - lastMailPurge > 3600000) {
     lastMailPurge = now;
     const purged = db.purgeOldMail(7);
     if (purged > 0) {
       db.log('coordinator', 'mail_purged', { count: purged });
+    }
+    // Purge old activity log entries (>30 days)
+    const logPurged = db.getDb().prepare(
+      "DELETE FROM activity_log WHERE created_at < datetime('now', '-30 days')"
+    ).run();
+    if (logPurged.changes > 0) {
+      db.log('coordinator', 'activity_log_purged', { count: logPurged.changes });
     }
   }
 }
@@ -218,6 +228,96 @@ function recoverOrphanTasks() {
   for (const task of orphans) {
     db.updateTask(task.id, { status: 'ready', assigned_to: null });
     db.log('coordinator', 'orphan_task_recovered', { task_id: task.id });
+  }
+}
+
+function recoverStaleIntegrations(now) {
+  const integratingRequests = db.getDb().prepare(
+    "SELECT * FROM requests WHERE status = 'integrating'"
+  ).all();
+
+  for (const req of integratingRequests) {
+    const merges = db.getDb().prepare(
+      'SELECT * FROM merge_queue WHERE request_id = ?'
+    ).all(req.id);
+
+    // Case 1: No merge_queue entries and integrating > 15 minutes → complete (e.g. tier1 tasks)
+    if (merges.length === 0) {
+      const integratingAge = (now - new Date(req.updated_at).getTime()) / 1000;
+      if (integratingAge > 900) { // 15 minutes
+        db.updateRequest(req.id, {
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          result: 'Completed (no PRs to merge)',
+        });
+        db.sendMail('master-1', 'request_completed', {
+          request_id: req.id,
+          result: 'Completed (no PRs to merge)',
+        });
+        db.log('coordinator', 'stale_integration_recovered', {
+          request_id: req.id,
+          reason: 'no_merge_entries_timeout',
+        });
+      }
+      continue;
+    }
+
+    // Check for merges stuck in 'merging' for > 5 minutes → timeout them
+    for (const m of merges) {
+      if (m.status === 'merging' && m.created_at) {
+        const mergeAge = (now - new Date(m.created_at).getTime()) / 1000;
+        if (mergeAge > 300) { // 5 minutes
+          db.updateMerge(m.id, { status: 'failed', error: 'Merge timed out after 5 minutes' });
+          db.log('coordinator', 'merge_timeout', { merge_id: m.id, request_id: req.id });
+        }
+      }
+    }
+
+    // Re-fetch merges after potential timeout updates
+    const freshMerges = db.getDb().prepare(
+      'SELECT * FROM merge_queue WHERE request_id = ?'
+    ).all(req.id);
+
+    const allResolved = freshMerges.every(m => ['merged', 'conflict', 'failed'].includes(m.status));
+    if (!allResolved) continue;
+
+    const allMerged = freshMerges.every(m => m.status === 'merged');
+
+    if (allMerged) {
+      // Case 2: All merges succeeded → mark request completed
+      const result = `All ${freshMerges.length} PR(s) merged successfully`;
+      db.updateRequest(req.id, {
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        result,
+      });
+      db.sendMail('master-1', 'request_completed', { request_id: req.id, result });
+      db.log('coordinator', 'stale_integration_recovered', {
+        request_id: req.id,
+        reason: 'all_merged',
+      });
+    } else {
+      // Case 3: All resolved but some failed/conflict → mark request failed
+      const failedMerges = freshMerges.filter(m => m.status !== 'merged');
+      const details = failedMerges.map(m => `${m.branch}: ${m.status}${m.error ? ' - ' + m.error.slice(0, 100) : ''}`).join('; ');
+      db.updateRequest(req.id, {
+        status: 'failed',
+        result: `Merge failures: ${details}`,
+      });
+      db.sendMail('master-1', 'request_failed', {
+        request_id: req.id,
+        error: `Merge failures: ${details}`,
+      });
+      db.sendMail('allocator', 'merge_failed', {
+        request_id: req.id,
+        error: details,
+      });
+      db.log('coordinator', 'stale_integration_recovered', {
+        request_id: req.id,
+        reason: 'merge_failures',
+        details,
+      });
+    }
   }
 }
 

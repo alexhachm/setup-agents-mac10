@@ -269,7 +269,11 @@ echo "[8/8] Starting coordinator..."
 
 # Check if coordinator is already running (e.g. launched by GUI)
 ALREADY_RUNNING=false
-if [ -S "$CLAUDE_DIR/state/mac10.sock" ] || mac10 ping &>/dev/null 2>&1; then
+SOCK_PATH_FILE="$CLAUDE_DIR/state/mac10.sock.path"
+if [ -f "$SOCK_PATH_FILE" ] && [ -S "$(cat "$SOCK_PATH_FILE" 2>/dev/null)" ]; then
+  ALREADY_RUNNING=true
+  echo "  Coordinator already running, skipping start."
+elif mac10 ping &>/dev/null 2>&1; then
   ALREADY_RUNNING=true
   echo "  Coordinator already running, skipping start."
 fi
@@ -278,15 +282,15 @@ if [ "$ALREADY_RUNNING" = false ]; then
   node "$SCRIPT_DIR/coordinator/src/index.js" "$PROJECT_DIR" &
   COORD_PID=$!
 
-  # Wait for socket
+  # Wait for socket (on WSL, socket is in /tmp/ — check via mac10.sock.path)
   for i in $(seq 1 30); do
-    if [ -S "$CLAUDE_DIR/state/mac10.sock" ]; then
+    if [ -f "$SOCK_PATH_FILE" ] && [ -S "$(cat "$SOCK_PATH_FILE" 2>/dev/null)" ]; then
       break
     fi
     sleep 0.2
   done
 
-  if [ ! -S "$CLAUDE_DIR/state/mac10.sock" ]; then
+  if ! [ -f "$SOCK_PATH_FILE" ] || ! [ -S "$(cat "$SOCK_PATH_FILE" 2>/dev/null)" ]; then
     echo "WARNING: Coordinator didn't create socket within 6s"
     echo "  Check logs or run: node $SCRIPT_DIR/coordinator/src/index.js $PROJECT_DIR"
   else

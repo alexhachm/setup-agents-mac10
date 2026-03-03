@@ -60,7 +60,10 @@ const handlers = {
     }
 
     const windowName = `worker-${worker.id}`;
-    if (tmux.hasWindow(windowName)) return;
+    // Kill any existing window to prevent duplicate sentinels
+    if (tmux.hasWindow(windowName)) {
+      tmux.killWindow(windowName);
+    }
     const sentinelPath = path.join(projectDir, '.claude', 'scripts', 'worker-sentinel.sh');
     tmux.createWindow(windowName, `bash "${sentinelPath}" ${worker.id} "${projectDir}"`, worktreePath);
     db.updateWorker(worker.id, {
@@ -98,6 +101,7 @@ function shutdown() {
   console.log('Shutting down...');
   allocator.stop();
   watchdog.stop();
+  merger.stop();
   cliServer.stop();
   webServer.stop();
   db.log('coordinator', 'stopped');

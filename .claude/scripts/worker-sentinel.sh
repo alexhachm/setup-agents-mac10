@@ -34,9 +34,10 @@ while true; do
       git reset --hard origin/main 2>/dev/null || true
     }
 
-    # Launch Claude worker
+    # Launch Claude worker (unset CLAUDECODE to allow nested session in tmux)
     echo "[sentinel-$WORKER_ID] Launching claude..."
-    claude --model opus --dangerously-skip-permissions "/worker-loop" 2>&1 || true
+    unset CLAUDECODE
+    claude --model opus --dangerously-skip-permissions -p "/worker-loop" 2>&1 || true
 
     # Reset worker status to idle after Claude exits
     echo "[sentinel-$WORKER_ID] Claude exited, resetting to idle..."

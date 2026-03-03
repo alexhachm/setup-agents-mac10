@@ -66,11 +66,37 @@ function send(socketPath, command, args) {
   });
 }
 
+function findSocketPathForProject(projectDir) {
+  const pipeFile = path.join(projectDir, '.claude', 'state', 'mac10.pipe');
+  if (fs.existsSync(pipeFile)) {
+    return fs.readFileSync(pipeFile, 'utf8').trim();
+  }
+  const sockPathFile = path.join(projectDir, '.claude', 'state', 'mac10.sock.path');
+  if (fs.existsSync(sockPathFile)) {
+    return fs.readFileSync(sockPathFile, 'utf8').trim();
+  }
+  const sock = path.join(projectDir, '.claude', 'state', 'mac10.sock');
+  if (fs.existsSync(sock)) return sock;
+  console.error(`Error: mac10 coordinator not running for project: ${projectDir}`);
+  process.exit(1);
+}
+
 async function main() {
-  const argv = process.argv.slice(2);
-  if (argv.length === 0) {
+  const rawArgv = process.argv.slice(2);
+  if (rawArgv.length === 0) {
     printUsage();
     process.exit(0);
+  }
+
+  // Extract --project <dir> flag
+  let projectOverride = null;
+  const argv = [];
+  for (let i = 0; i < rawArgv.length; i++) {
+    if (rawArgv[i] === '--project' && i + 1 < rawArgv.length) {
+      projectOverride = rawArgv[++i];
+    } else {
+      argv.push(rawArgv[i]);
+    }
   }
 
   const cmd = argv[0];
@@ -110,7 +136,7 @@ async function main() {
     process.exit(0);
   }
 
-  const socketPath = findSocketPath();
+  const socketPath = projectOverride ? findSocketPathForProject(projectOverride) : findSocketPath();
 
   try {
     let result;
@@ -192,7 +218,7 @@ async function main() {
 
       // WORKER
       case 'my-task':
-        result = await send(socketPath, 'my-task', { worker_id: parseInt(argv[1]) });
+        result = await send(socketPath, 'my-task', { worker_id: argv[1] });
         if (result.ok) {
           if (result.task) {
             console.log(JSON.stringify(result.task, null, 2));
@@ -204,7 +230,7 @@ async function main() {
 
       case 'start-task':
         result = await send(socketPath, 'start-task', {
-          worker_id: parseInt(argv[1]),
+          worker_id: argv[1],
           task_id: parseInt(argv[2]),
         });
         if (result.ok) console.log('Task started.');
@@ -212,14 +238,20 @@ async function main() {
         break;
 
       case 'heartbeat':
-        result = await send(socketPath, 'heartbeat', { worker_id: parseInt(argv[1]) });
+        result = await send(socketPath, 'heartbeat', { worker_id: argv[1] });
+        if (result.ok) console.log('ok');
+        else console.error(result.error);
+        break;
+
+      case 'reset-worker':
+        result = await send(socketPath, 'reset-worker', { worker_id: argv[1] });
         if (result.ok) console.log('ok');
         else console.error(result.error);
         break;
 
       case 'complete-task':
         result = await send(socketPath, 'complete-task', {
-          worker_id: parseInt(argv[1]),
+          worker_id: argv[1],
           task_id: parseInt(argv[2]),
           pr_url: argv[3] || '',
           branch: argv[4] || '',
@@ -231,7 +263,7 @@ async function main() {
 
       case 'fail-task':
         result = await send(socketPath, 'fail-task', {
-          worker_id: parseInt(argv[1]),
+          worker_id: argv[1],
           task_id: parseInt(argv[2]),
           error: argv.slice(3).join(' '),
         });
@@ -338,6 +370,14 @@ async function main() {
         } else console.error(result.error);
         break;
 
+      case 'integrate':
+        result = await send(socketPath, 'integrate', {
+          request_id: argv[1],
+        });
+        if (result.ok) console.log(`Integration triggered for ${result.request_id}: ${result.merges_queued} merge(s) queued.`);
+        else console.error(result.error);
+        break;
+
       // SYSTEM
       case 'register-worker':
         result = await send(socketPath, 'register-worker', {
@@ -363,6 +403,29 @@ async function main() {
         result = await send(socketPath, 'ping', {});
         if (result.ok) console.log(`pong (${Date.now() - result.ts}ms)`);
         else console.error(result.error);
+        break;
+
+      case 'add-worker':
+        result = await send(socketPath, 'add-worker', {});
+        if (result.ok) console.log(`Worker ${result.worker_id} created (${result.worktree_path}, branch: ${result.branch})`);
+        else console.error(`Error: ${result.error}`);
+        break;
+
+      case 'merge-status':
+        result = await send(socketPath, 'merge-status', { request_id: argv[1] || undefined });
+        if (result.ok) {
+          if (result.merges.length === 0) {
+            console.log('No merge queue entries.');
+          } else {
+            console.log('\n=== Merge Queue ===');
+            for (const m of result.merges) {
+              const age = m.created_at ? `${Math.round((Date.now() - new Date(m.created_at).getTime()) / 60000)}m ago` : '';
+              const err = m.error ? ` error: ${m.error.slice(0, 80)}` : '';
+              console.log(`  #${m.id} [${m.status}] ${m.branch || '(no branch)'} ${age}${err}`);
+            }
+            console.log('');
+          }
+        } else console.error(result.error);
         break;
 
       default:
@@ -397,10 +460,9 @@ ARCHITECT:
 ALLOCATOR:
   ready-tasks                    List tasks ready for assignment
   assign-task <task_id> <worker_id>  Assign task to worker (atomic)
-  claim-worker <worker_id> [claimer] Claim worker before assignment
-  release-worker <worker_id>     Release a claimed worker
-  worker-status                  Show all workers with claim info
+  worker-status                  Show all workers
   check-completion <request_id>  Check if all tasks for request are done
+  integrate <request_id>         Trigger worktree merge/integration
 
 WORKER:
   my-task <worker_id>            Get current assigned task
@@ -414,12 +476,21 @@ SYSTEM:
   start [project_dir]            Start coordinator
   stop                           Stop coordinator
   repair                         Fix stuck state
+  add-worker                     Create a new worker worktree (up to max_workers)
+  merge-status [request_id]      Show merge queue entries
   gui                            Show dashboard URL
   ping                           Check coordinator health
+
+FLAGS:
+  --project <dir>                Use coordinator for specified project dir
 `.trim());
 }
 
 function printStatus(data) {
+  if (data.project_dir) {
+    console.log(`\n=== Project: ${data.project_dir} ===`);
+  }
+
   console.log('\n=== Requests ===');
   if (data.requests.length === 0) {
     console.log('  (none)');
@@ -451,6 +522,16 @@ function printStatus(data) {
       console.log(`  #${t.id} [${t.status}] ${t.subject.slice(0, 50)}${worker}`);
     }
   }
+
+  if (data.merges && data.merges.length > 0) {
+    console.log('\n=== Merges ===');
+    for (const m of data.merges) {
+      const age = m.created_at ? `${Math.round((Date.now() - new Date(m.created_at).getTime()) / 60000)}m` : '';
+      const err = m.error ? ` — ${m.error.slice(0, 60)}` : '';
+      console.log(`  #${m.id} [${m.status}] ${m.branch || '(no branch)'} (${age})${err}`);
+    }
+  }
+
   console.log('');
 }
 

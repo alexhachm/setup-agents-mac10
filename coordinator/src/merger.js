@@ -20,10 +20,11 @@ function safeExec(file, args, cwd) {
 }
 
 let processing = false;
+let mergerIntervalId = null;
 
 function start(projectDir) {
   // Merger is triggered by task completions, but also runs periodic checks
-  setInterval(() => {
+  mergerIntervalId = setInterval(() => {
     try {
       processQueue(projectDir);
     } catch (e) {
@@ -42,9 +43,26 @@ function onTaskCompleted(taskId) {
   const incomplete = allTasks.filter(t => t.status !== 'completed' && t.status !== 'failed');
 
   if (incomplete.length === 0) {
-    // All tasks done — mark request for integration
-    db.updateRequest(task.request_id, { status: 'integrating' });
-    db.log('coordinator', 'request_ready_for_merge', { request_id: task.request_id });
+    // Check if there are any pending merges to process
+    const pendingMerges = db.getDb().prepare(
+      "SELECT COUNT(*) as cnt FROM merge_queue WHERE request_id = ? AND status IN ('pending', 'merging')"
+    ).get(task.request_id);
+
+    if (pendingMerges.cnt > 0) {
+      // Has PRs to merge — mark as integrating, merger will handle it
+      db.updateRequest(task.request_id, { status: 'integrating' });
+      db.log('coordinator', 'request_ready_for_merge', { request_id: task.request_id });
+    } else {
+      // No PRs to merge — complete immediately (e.g. verification tasks, already-merged)
+      const result = `All ${allTasks.length} task(s) completed (no PRs to merge)`;
+      db.updateRequest(task.request_id, {
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        result,
+      });
+      db.sendMail('master-1', 'request_completed', { request_id: task.request_id, result });
+      db.log('coordinator', 'request_completed', { request_id: task.request_id });
+    }
   }
 }
 
@@ -87,7 +105,6 @@ function processQueue(projectDir) {
 function attemptMerge(entry, projectDir) {
   validateEntry(entry);
 
-  // 4-tier merge resolution
   // Tier 1: Clean merge via gh CLI
   const tier1 = tryCleanMerge(entry, projectDir);
   if (tier1.success) return { success: true, tier: 1 };
@@ -96,13 +113,26 @@ function attemptMerge(entry, projectDir) {
   const tier2 = tryAutoResolve(entry, projectDir);
   if (tier2.success) return { success: true, tier: 2 };
 
-  // Tier 3: Conflict detected — create fix task for AI resolution
-  const tier3 = tryAIResolve(entry, projectDir);
-  if (tier3.success) return { success: true, tier: 3 };
-
-  // Tier 4: Reimagine — create new task to redo the work on latest main
-  createRedoTask(entry);
-  return { success: false, conflict: true, error: 'Needs reimplementation on latest main', tier: 4 };
+  // Tiers 1 & 2 failed — delegate to Master-3 (Allocator) for conflict resolution.
+  // Master-3 has domain affinity context and the full task list to decide
+  // whether to create a fix task (resolve conflicts) or a redo task.
+  const task = db.getTask(entry.task_id);
+  db.sendMail('allocator', 'merge_failed', {
+    request_id: entry.request_id,
+    task_id: entry.task_id,
+    merge_id: entry.id,
+    branch: entry.branch,
+    pr_url: entry.pr_url,
+    error: tier2.error || tier1.error,
+    original_task: task ? {
+      subject: task.subject,
+      description: task.description,
+      domain: task.domain,
+      files: task.files,
+      assigned_to: task.assigned_to,
+    } : null,
+  });
+  return { success: false, conflict: true, error: tier2.error || tier1.error, tier: 3 };
 }
 
 function tryCleanMerge(entry, projectDir) {
@@ -134,43 +164,6 @@ function tryAutoResolve(entry, projectDir) {
   }
 }
 
-function tryAIResolve(entry, projectDir) {
-  // Create a fix task for an AI worker to resolve conflicts
-  try {
-    const task = db.getTask(entry.task_id);
-    if (!task) return { success: false, error: 'Original task not found' };
-
-    const fixTaskId = db.createTask({
-      request_id: entry.request_id,
-      subject: `Resolve merge conflict: ${entry.branch}`,
-      description: `The branch "${entry.branch}" has merge conflicts with main. Resolve all conflicts and push.\n\nOriginal task: ${task.subject}\nPR: ${entry.pr_url}`,
-      domain: task.domain,
-      priority: 'high',
-      tier: 2,
-    });
-    db.updateTask(fixTaskId, { status: 'ready' });
-    return { success: true }; // Will be handled by allocator
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
-}
-
-function createRedoTask(entry) {
-  const task = db.getTask(entry.task_id);
-  if (!task) return;
-
-  const redoTaskId = db.createTask({
-    request_id: entry.request_id,
-    subject: `Redo: ${task.subject}`,
-    description: `Previous attempt on branch "${entry.branch}" could not be merged. Redo this work on latest main.\n\nOriginal description:\n${task.description}`,
-    domain: task.domain,
-    files: task.files,
-    priority: 'high',
-    tier: task.tier,
-  });
-  db.updateTask(redoTaskId, { status: 'ready' });
-}
-
 function checkRequestCompletion(requestId) {
   const allMerges = db.getDb().prepare(
     "SELECT * FROM merge_queue WHERE request_id = ?"
@@ -193,4 +186,8 @@ function checkRequestCompletion(requestId) {
   }
 }
 
-module.exports = { start, onTaskCompleted, processQueue, attemptMerge };
+function stop() {
+  if (mergerIntervalId) { clearInterval(mergerIntervalId); mergerIntervalId = null; }
+}
+
+module.exports = { start, stop, onTaskCompleted, processQueue, attemptMerge };
