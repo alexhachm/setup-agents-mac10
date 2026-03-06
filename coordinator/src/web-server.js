@@ -32,6 +32,10 @@ function start(projectDir, port = 3100, scriptDir = null) {
   // Resolve scriptDir (mac10 repo root containing setup.sh)
   const resolvedScriptDir = scriptDir || path.join(__dirname, '..', '..');
 
+  // Detect WSL — used to route spawns through wsl.exe
+  const isWSL = fs.existsSync('/proc/version') &&
+    (() => { try { return fs.readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft'); } catch { return false; } })();
+
   // CORS -- allow cross-port requests from other mac10 GUI tabs
   app.use((req, res, next) => {
     const origin = req.headers.origin;
@@ -251,11 +255,20 @@ function start(projectDir, port = 3100, scriptDir = null) {
       MAC10_GUI_DIR: path.join(resolvedScriptDir, 'gui', 'public'),
     });
 
-    setupProcess = spawn('bash', [setupScript, reqProjectDir, String(workers)], {
-      cwd: resolvedScriptDir,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    if (isWSL) {
+      const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
+      setupProcess = spawn('wsl.exe', ['-d', distro, '--', 'bash', setupScript, reqProjectDir, String(workers)], {
+        cwd: resolvedScriptDir,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } else {
+      setupProcess = spawn('bash', [setupScript, reqProjectDir, String(workers)], {
+        cwd: resolvedScriptDir,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    }
 
     // Stream stdout
     let buffer = '';
@@ -316,8 +329,6 @@ function start(projectDir, port = 3100, scriptDir = null) {
   // (Windows Terminal treats `;` as its own command separator)
 
   const launchScript = path.join(resolvedScriptDir, 'scripts', 'launch-agent.sh');
-  const isWSL = fs.existsSync('/proc/version') &&
-    (() => { try { return fs.readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft'); } catch { return false; } })();
 
   function launchAgent(title, windowName, model, slashCmd, logTag, res) {
     const repoDir = db.getConfig('project_dir') || projectDir;
@@ -421,11 +432,22 @@ function start(projectDir, port = 3100, scriptDir = null) {
       'git push -u origin "$(git branch --show-current)" 2>&1',
     ].join('\n');
 
-    const pushProc = spawn('bash', ['-c', script], {
-      cwd: repoDir,
-      env: { ...process.env, MAC10_REPO: repo, MAC10_REPO_DIR: repoDir },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const pushEnv = { ...process.env, MAC10_REPO: repo, MAC10_REPO_DIR: repoDir };
+    let pushProc;
+    if (isWSL) {
+      const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
+      pushProc = spawn('wsl.exe', ['-d', distro, '--', 'bash', '-c', script], {
+        cwd: repoDir,
+        env: pushEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } else {
+      pushProc = spawn('bash', ['-c', script], {
+        cwd: repoDir,
+        env: pushEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    }
 
     let buf = '';
     pushProc.stdout.on('data', (chunk) => {
@@ -500,11 +522,21 @@ function start(projectDir, port = 3100, scriptDir = null) {
       const env = { ...process.env, MAC10_PORT: String(newPort) };
 
       const indexPath = path.join(__dirname, 'index.js');
-      const child = spawn('node', [indexPath, reqDir], {
-        env,
-        stdio: 'ignore',
-        detached: true,
-      });
+      let child;
+      if (isWSL) {
+        const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
+        child = spawn('wsl.exe', ['-d', distro, '--', 'node', indexPath, reqDir], {
+          env,
+          stdio: 'ignore',
+          detached: true,
+        });
+      } else {
+        child = spawn('node', [indexPath, reqDir], {
+          env,
+          stdio: 'ignore',
+          detached: true,
+        });
+      }
       child.unref();
 
       // Wait for the new coordinator to start and register
