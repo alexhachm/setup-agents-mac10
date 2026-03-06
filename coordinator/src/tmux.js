@@ -1,8 +1,19 @@
 'use strict';
 
 const { execSync, execFileSync } = require('child_process');
+const crypto = require('crypto');
 
-const SESSION = 'mac10';
+let SESSION = 'mac10';
+
+function setSession(projectDir) {
+  const hash = crypto.createHash('md5').update(projectDir).digest('hex').slice(0, 6);
+  SESSION = `mac10-${hash}`;
+  return SESSION;
+}
+
+function getSession() {
+  return SESSION;
+}
 
 function exec(cmd, opts = {}) {
   try {
@@ -13,7 +24,22 @@ function exec(cmd, opts = {}) {
   }
 }
 
+let available = null;
+
+function isAvailable() {
+  if (available === null) {
+    try {
+      execSync('tmux -V', { encoding: 'utf8', timeout: 5000, stdio: 'pipe' });
+      available = true;
+    } catch {
+      available = false;
+    }
+  }
+  return available;
+}
+
 function ensureSession() {
+  if (!isAvailable()) return;
   try {
     exec(`tmux has-session -t ${SESSION} 2>/dev/null`);
   } catch {
@@ -22,6 +48,7 @@ function ensureSession() {
 }
 
 function createWindow(name, cmd, cwd, envVars) {
+  if (!isAvailable()) throw new Error('tmux not available — use Windows Terminal tab spawning');
   ensureSession();
   const cwdFlag = cwd ? `-c "${cwd}"` : '';
   exec(`tmux new-window -t ${SESSION} -n "${name}" ${cwdFlag}`);
@@ -43,6 +70,7 @@ function sendKeys(window, keys) {
 }
 
 function isPaneAlive(window) {
+  if (!isAvailable()) return false;
   try {
     const result = exec(`tmux list-panes -t ${SESSION}:${window} -F "#{pane_pid}" 2>/dev/null`, { ignoreError: true });
     return result.length > 0;
@@ -90,7 +118,10 @@ function capturePane(window, lines = 50) {
 }
 
 module.exports = {
-  SESSION,
+  get SESSION() { return SESSION; },
+  setSession,
+  getSession,
+  isAvailable,
   ensureSession,
   createWindow,
   sendKeys,

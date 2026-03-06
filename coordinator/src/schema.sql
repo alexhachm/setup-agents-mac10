@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   pr_url TEXT,
   branch TEXT,
   validation TEXT,  -- JSON: what checks to run
+  overlap_with TEXT,  -- JSON array of task IDs sharing files
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   started_at TEXT,
@@ -126,6 +127,7 @@ CREATE INDEX IF NOT EXISTS idx_activity_actor ON activity_log(actor);
 CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_overlap ON tasks(overlap_with) WHERE overlap_with IS NOT NULL;
 
 -- Default config
 INSERT OR IGNORE INTO config (key, value) VALUES

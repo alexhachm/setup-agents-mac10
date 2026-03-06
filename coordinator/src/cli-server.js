@@ -6,6 +6,7 @@ const path = require('path');
 const db = require('./db');
 
 let server = null;
+let tcpServer = null;
 
 const MAX_PAYLOAD_SIZE = 1024 * 1024; // 1MB
 
@@ -43,6 +44,7 @@ const COMMAND_SCHEMAS = {
   'add-worker':        { required: [], types: {} },
   'merge-status':      { required: [], types: { request_id: 'string' } },
   'reset-worker':      { required: ['worker_id'], types: { worker_id: 'string' } },
+  'check-overlaps':    { required: ['request_id'], types: { request_id: 'string' } },
 };
 
 function validateCommand(cmd) {
@@ -94,15 +96,8 @@ function getSocketPath(projectDir) {
   return sockPath;
 }
 
-function start(projectDir, handlers) {
-  const socketPath = getSocketPath(projectDir);
-
-  // Clean up stale socket (not needed for Windows named pipes)
-  if (process.platform !== 'win32') {
-    try { fs.unlinkSync(socketPath); } catch {}
-  }
-
-  server = net.createServer((conn) => {
+function createConnectionHandler(handlers) {
+  return (conn) => {
     let data = '';
     conn.on('data', (chunk) => {
       data += chunk.toString();
@@ -126,13 +121,42 @@ function start(projectDir, handlers) {
       }
     });
     conn.on('error', () => {}); // ignore broken pipe
-  });
+  };
+}
 
+function start(projectDir, handlers) {
+  const socketPath = getSocketPath(projectDir);
+  const connHandler = createConnectionHandler(handlers);
+
+  // Clean up stale socket (not needed for Windows named pipes)
+  if (process.platform !== 'win32') {
+    try { fs.unlinkSync(socketPath); } catch {}
+  }
+
+  // Primary listener: Unix socket (WSL/macOS) or named pipe (Windows)
+  server = net.createServer(connHandler);
   server.listen(socketPath, () => {
-    // Make socket accessible (not needed on Windows named pipes)
     if (process.platform !== 'win32') {
       try { fs.chmodSync(socketPath, 0o600); } catch {}
     }
+  });
+
+  // TCP bridge: allows cross-environment access (Git Bash ↔ WSL, remote agents)
+  // Derive a stable per-project port from the same hash used for sockets (range 31000-31999)
+  const crypto2 = require('crypto');
+  const portHash = crypto2.createHash('md5').update(projectDir).digest('hex');
+  const derivedPort = 31000 + (parseInt(portHash.slice(0, 4), 16) % 1000);
+  const tcpPort = parseInt(process.env.MAC10_CLI_PORT) || derivedPort;
+  const stateDir = path.join(projectDir, '.claude', 'state');
+  tcpServer = net.createServer(connHandler);
+  tcpServer.listen(tcpPort, '127.0.0.1', () => {
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'mac10.tcp.port'), String(tcpPort), 'utf8');
+    console.log(`CLI TCP bridge listening on localhost:${tcpPort}`);
+  });
+  tcpServer.on('error', (e) => {
+    // Port in use — not fatal, Unix socket still works
+    console.warn(`TCP bridge failed (port ${tcpPort}): ${e.message}`);
   });
 
   return server;
@@ -140,6 +164,7 @@ function start(projectDir, handlers) {
 
 function stop() {
   if (server) { server.close(); server = null; }
+  if (tcpServer) { tcpServer.close(); tcpServer = null; }
 }
 
 function respond(conn, data) {
@@ -218,7 +243,35 @@ function handleCommand(cmd, conn, handlers) {
         if (!args.depends_on || args.depends_on.length === 0) {
           db.updateTask(taskId, { status: 'ready' });
         }
-        respond(conn, { ok: true, task_id: taskId });
+        // Detect file overlaps with other tasks in the same request
+        let overlaps = [];
+        const taskFiles = Array.isArray(args.files) ? args.files : (typeof args.files === 'string' ? (() => { try { return JSON.parse(args.files); } catch { return args.files.split(',').map(f => f.trim()); } })() : null);
+        if (taskFiles && taskFiles.length > 0) {
+          overlaps = db.findOverlappingTasks(args.request_id, taskFiles);
+          if (overlaps.length > 0) {
+            // Set overlap_with on the new task
+            const overlapIds = overlaps.map(o => o.task_id);
+            db.updateTask(taskId, { overlap_with: JSON.stringify(overlapIds) });
+            // Update existing overlapping tasks to include the new task
+            for (const o of overlaps) {
+              const existing = db.getTask(o.task_id);
+              let existingOverlaps = [];
+              if (existing && existing.overlap_with) {
+                try { existingOverlaps = JSON.parse(existing.overlap_with); } catch {}
+              }
+              if (!existingOverlaps.includes(taskId)) {
+                existingOverlaps.push(taskId);
+                db.updateTask(o.task_id, { overlap_with: JSON.stringify(existingOverlaps) });
+              }
+            }
+            db.log('coordinator', 'overlap_detected', {
+              task_id: taskId,
+              request_id: args.request_id,
+              overlaps: overlaps.map(o => ({ task_id: o.task_id, shared_files: o.shared_files })),
+            });
+          }
+        }
+        respond(conn, { ok: true, task_id: taskId, overlaps });
         break;
       }
       case 'tier1-complete': {
@@ -457,6 +510,12 @@ function handleCommand(cmd, conn, handlers) {
       case 'check-completion': {
         const completion = db.checkRequestCompletion(args.request_id);
         respond(conn, { ok: true, ...completion });
+        break;
+      }
+
+      case 'check-overlaps': {
+        const overlapPairs = db.getOverlapsForRequest(args.request_id);
+        respond(conn, { ok: true, request_id: args.request_id, overlaps: overlapPairs });
         break;
       }
 

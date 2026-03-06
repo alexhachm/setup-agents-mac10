@@ -13,6 +13,11 @@
     <span id="status-text">Connecting...</span>
   </header>
 
+  <nav id="tab-bar">
+    <div id="tab-list"></div>
+    <button id="add-tab-btn" title="Add project">+</button>
+  </nav>
+
   <main>
     <section id="setup-panel">
       <div id="setup-header">
@@ -121,6 +126,36 @@
     <div id="settings-panel" class="settings-panel" style="display:none">
       <div class="settings-panel-title"></div>
       <div class="settings-panel-items"></div>
+    </div>
+
+    <div id="add-project-modal" class="modal" style="display:none">
+      <div class="modal-content">
+        <h3>Add Project</h3>
+        <div class="modal-field">
+          <label for="modal-preset-select">Preset</label>
+          <select id="modal-preset-select"><option value="">-- New --</option></select>
+        </div>
+        <div class="modal-field">
+          <label for="modal-project-dir">Project Directory</label>
+          <input type="text" id="modal-project-dir" placeholder="/path/to/your-project" />
+        </div>
+        <div class="modal-field">
+          <label for="modal-github-repo">GitHub Repo (optional)</label>
+          <input type="text" id="modal-github-repo" placeholder="owner/repo" />
+        </div>
+        <div class="modal-field">
+          <label for="modal-worker-count">Workers</label>
+          <input type="number" id="modal-worker-count" min="1" max="8" value="4" />
+        </div>
+        <div class="modal-field modal-save-preset-row">
+          <label><input type="checkbox" id="modal-save-preset" checked /> Save as preset</label>
+        </div>
+        <div class="modal-buttons">
+          <button id="modal-launch-btn">Launch</button>
+          <button id="modal-cancel-btn">Cancel</button>
+        </div>
+        <div id="modal-error" style="display:none"></div>
+      </div>
     </div>
   </main>
 

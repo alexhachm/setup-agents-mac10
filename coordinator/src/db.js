@@ -9,7 +9,7 @@ let db = null;
 
 const VALID_COLUMNS = Object.freeze({
   requests: new Set(['description', 'tier', 'status', 'result', 'completed_at']),
-  tasks: new Set(['request_id', 'subject', 'description', 'domain', 'files', 'priority', 'tier', 'depends_on', 'assigned_to', 'status', 'pr_url', 'branch', 'validation', 'started_at', 'completed_at', 'result']),
+  tasks: new Set(['request_id', 'subject', 'description', 'domain', 'files', 'priority', 'tier', 'depends_on', 'assigned_to', 'status', 'pr_url', 'branch', 'validation', 'overlap_with', 'started_at', 'completed_at', 'result']),
   workers: new Set(['status', 'domain', 'worktree_path', 'branch', 'tmux_session', 'tmux_window', 'pid', 'current_task_id', 'claimed_by', 'last_heartbeat', 'launched_at', 'tasks_completed']),
   merge_queue: new Set(['status', 'priority', 'merged_at', 'error']),
 });
@@ -43,6 +43,11 @@ function init(projectDir) {
   const cols = db.prepare("PRAGMA table_info(workers)").all().map(c => c.name);
   if (!cols.includes('claimed_by')) {
     db.exec("ALTER TABLE workers ADD COLUMN claimed_by TEXT");
+  }
+  // Migrate: add overlap_with column if missing
+  const taskCols = db.prepare("PRAGMA table_info(tasks)").all().map(c => c.name);
+  if (!taskCols.includes('overlap_with')) {
+    db.exec("ALTER TABLE tasks ADD COLUMN overlap_with TEXT");
   }
   // Store project dir in config
   db.prepare('UPDATE config SET value = ? WHERE key = ?').run(projectDir, 'project_dir');
@@ -370,6 +375,90 @@ function deletePreset(id) {
   return result.changes > 0;
 }
 
+// --- Overlap detection helpers ---
+
+function findOverlappingTasks(requestId, files) {
+  if (!files || files.length === 0) return [];
+  // Normalize paths: strip leading './'
+  const normalize = (f) => f.replace(/^\.\//, '');
+  const normalizedFiles = files.map(normalize);
+
+  // Find other tasks in the same request that have overlapping files
+  const tasks = getDb().prepare(
+    "SELECT id, files, overlap_with FROM tasks WHERE request_id = ? AND files IS NOT NULL"
+  ).all(requestId);
+
+  const overlaps = [];
+  for (const task of tasks) {
+    let taskFiles;
+    try { taskFiles = JSON.parse(task.files).map(normalize); } catch { continue; }
+    const shared = normalizedFiles.filter(f => taskFiles.includes(f));
+    if (shared.length > 0) {
+      overlaps.push({ task_id: task.id, shared_files: shared, count: shared.length });
+    }
+  }
+  return overlaps;
+}
+
+function getOverlapsForRequest(requestId) {
+  const tasks = getDb().prepare(
+    "SELECT id, subject, files, overlap_with FROM tasks WHERE request_id = ? AND overlap_with IS NOT NULL"
+  ).all(requestId);
+
+  const pairs = [];
+  const seen = new Set();
+  for (const task of tasks) {
+    let overlapIds;
+    try { overlapIds = JSON.parse(task.overlap_with); } catch { continue; }
+    for (const otherId of overlapIds) {
+      const key = [Math.min(task.id, otherId), Math.max(task.id, otherId)].join('-');
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const other = getDb().prepare("SELECT id, subject, files FROM tasks WHERE id = ?").get(otherId);
+      if (!other) continue;
+
+      // Calculate shared files
+      const normalize = (f) => f.replace(/^\.\//, '');
+      let filesA, filesB;
+      try { filesA = JSON.parse(task.files).map(normalize); } catch { continue; }
+      try { filesB = JSON.parse(other.files).map(normalize); } catch { continue; }
+      const shared = filesA.filter(f => filesB.includes(f));
+      const severity = shared.length >= 3 ? 'critical' : shared.length >= 2 ? 'high' : 'low';
+
+      pairs.push({
+        task_a: task.id,
+        task_b: other.id,
+        subject_a: task.subject,
+        subject_b: other.subject,
+        shared_files: shared,
+        severity,
+      });
+    }
+  }
+  return pairs;
+}
+
+function hasOverlappingMergedTasks(taskId) {
+  const task = getDb().prepare("SELECT overlap_with FROM tasks WHERE id = ?").get(taskId);
+  if (!task || !task.overlap_with) return [];
+
+  let overlapIds;
+  try { overlapIds = JSON.parse(task.overlap_with); } catch { return []; }
+  if (overlapIds.length === 0) return [];
+
+  // Check which overlapping tasks have been merged
+  const merged = getDb().prepare(`
+    SELECT t.id, t.subject, t.branch, mq.status as merge_status
+    FROM tasks t
+    JOIN merge_queue mq ON mq.task_id = t.id
+    WHERE t.id IN (${overlapIds.map(() => '?').join(',')})
+      AND mq.status = 'merged'
+  `).all(...overlapIds);
+
+  return merged;
+}
+
 module.exports = {
   init, close, getDb,
   createRequest, getRequest, updateRequest, listRequests,
@@ -380,4 +469,5 @@ module.exports = {
   log, getLog,
   getConfig, setConfig,
   savePreset, listPresets, getPreset, deletePreset,
+  findOverlappingTasks, getOverlapsForRequest, hasOverlappingMergedTasks,
 };

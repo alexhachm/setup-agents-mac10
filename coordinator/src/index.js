@@ -9,6 +9,7 @@ const merger = require('./merger');
 const webServer = require('./web-server');
 const tmux = require('./tmux');
 const overlay = require('./overlay');
+const instanceRegistry = require('./instance-registry');
 
 const projectDir = process.argv[2] || process.cwd();
 const scriptDir = process.env.MAC10_SCRIPT_DIR || path.resolve(__dirname, '..', '..');
@@ -19,9 +20,14 @@ console.log(`mac10 coordinator starting for: ${projectDir}`);
 db.init(projectDir);
 console.log('Database initialized.');
 
-// Ensure tmux session
-tmux.ensureSession();
-console.log(`tmux session "${tmux.SESSION}" ready.`);
+// Namespace tmux session per project (optional — not available on native Windows)
+tmux.setSession(projectDir);
+if (tmux.isAvailable()) {
+  tmux.ensureSession();
+  console.log(`tmux session "${tmux.SESSION}" ready.`);
+} else {
+  console.log('tmux not available — workers will be spawned via Windows Terminal tabs.');
+}
 
 // Start CLI server (Unix socket for mac10 commands)
 const handlers = {
@@ -60,16 +66,26 @@ const handlers = {
     }
 
     const windowName = `worker-${worker.id}`;
-    // Kill any existing window to prevent duplicate sentinels
-    if (tmux.hasWindow(windowName)) {
-      tmux.killWindow(windowName);
+
+    if (tmux.isAvailable()) {
+      // WSL/Linux/macOS: spawn via tmux
+      if (tmux.hasWindow(windowName)) {
+        tmux.killWindow(windowName);
+      }
+      const sentinelPath = path.join(projectDir, '.claude', 'scripts', 'worker-sentinel.sh');
+      tmux.createWindow(windowName, `bash "${sentinelPath}" ${worker.id} "${projectDir}"`, worktreePath);
+      db.updateWorker(worker.id, {
+        tmux_session: tmux.SESSION,
+        tmux_window: windowName,
+      });
+    } else {
+      // Native Windows: spawn via launch-worker.sh (opens Windows Terminal tab)
+      const launchScript = path.join(projectDir, '.claude', 'scripts', 'launch-worker.sh');
+      const { execFile } = require('child_process');
+      execFile('bash', [launchScript, String(worker.id)], { cwd: projectDir }, (err) => {
+        if (err) db.log('coordinator', 'launch_worker_error', { worker_id: worker.id, error: err.message });
+      });
     }
-    const sentinelPath = path.join(projectDir, '.claude', 'scripts', 'worker-sentinel.sh');
-    tmux.createWindow(windowName, `bash "${sentinelPath}" ${worker.id} "${projectDir}"`, worktreePath);
-    db.updateWorker(worker.id, {
-      tmux_session: tmux.SESSION,
-      tmux_window: windowName,
-    });
     db.log('coordinator', 'worker_spawned', { worker_id: worker.id, window: windowName });
   },
 };
@@ -88,29 +104,45 @@ console.log('Watchdog running.');
 merger.start(projectDir);
 console.log('Merger running.');
 
-// Start web dashboard
-const port = parseInt(process.env.MAC10_PORT) || 3100;
-webServer.start(projectDir, port, scriptDir);
-console.log(`Web dashboard: http://localhost:${port}`);
+// Start web dashboard — single dashboard at port 3100 (or next free port)
+// All project coordinators register in the shared instance registry so the
+// dashboard at /api/instances can manage them all from one place.
+(async () => {
+  const port = parseInt(process.env.MAC10_PORT) || await instanceRegistry.acquirePort(3100);
+  webServer.start(projectDir, port, scriptDir);
+  console.log(`Web dashboard: http://localhost:${port}`);
 
-db.log('coordinator', 'started', { project_dir: projectDir, port });
-console.log('mac10 coordinator ready.');
+  instanceRegistry.register({
+    projectDir,
+    port,
+    pid: process.pid,
+    name: path.basename(projectDir),
+    tmuxSession: tmux.SESSION,
+    startedAt: new Date().toISOString(),
+  });
+  console.log('Instance registered in shared registry.');
 
-// Graceful shutdown
-function shutdown() {
-  console.log('Shutting down...');
-  allocator.stop();
-  watchdog.stop();
-  merger.stop();
-  cliServer.stop();
-  webServer.stop();
-  db.log('coordinator', 'stopped');
-  db.close();
-  process.exit(0);
-}
+  // Re-wire shutdown to know the port
+  function shutdown() {
+    console.log('Shutting down...');
+    instanceRegistry.deregister(port);
+    allocator.stop();
+    watchdog.stop();
+    merger.stop();
+    cliServer.stop();
+    webServer.stop();
+    db.log('coordinator', 'stopped');
+    db.close();
+    process.exit(0);
+  }
+  process.removeAllListeners('SIGINT');
+  process.removeAllListeners('SIGTERM');
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+  db.log('coordinator', 'started', { project_dir: projectDir, port });
+  console.log('mac10 coordinator ready.');
+})();
 
 // Keep alive
 setInterval(() => {}, 60000);

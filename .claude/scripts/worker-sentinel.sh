@@ -41,6 +41,6 @@ while true; do
 
     # Reset worker status to idle after Claude exits
     echo "[sentinel-$WORKER_ID] Claude exited, resetting to idle..."
-    mac10 heartbeat "$WORKER_ID" 2>/dev/null || true
+    mac10 reset-worker "$WORKER_ID" 2>/dev/null || true
   fi
 done

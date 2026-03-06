@@ -60,7 +60,17 @@
     "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac8\\\\setup-agents-mac10\\\\.worktrees\\\\wt-1",
     "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac8\\\\setup-agents-mac10\\\\.worktrees\\\\wt-2",
     "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac8\\\\setup-agents-mac10\\\\.worktrees\\\\wt-3",
-    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac8\\\\setup-agents-mac10\\\\.worktrees\\\\wt-4"
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac8\\\\setup-agents-mac10\\\\.worktrees\\\\wt-4",
+    "/mnt/c/Users/Owner/Desktop/setup-agents-mac10",
+    "/mnt/c/Users/Owner/Desktop/setup-agents-mac10/.worktrees/wt-1",
+    "/mnt/c/Users/Owner/Desktop/setup-agents-mac10/.worktrees/wt-2",
+    "/mnt/c/Users/Owner/Desktop/setup-agents-mac10/.worktrees/wt-3",
+    "/mnt/c/Users/Owner/Desktop/setup-agents-mac10/.worktrees/wt-4",
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac10",
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac10\\\\.worktrees\\\\wt-1",
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac10\\\\.worktrees\\\\wt-2",
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac10\\\\.worktrees\\\\wt-3",
+    "C:\\\\Users\\\\Owner\\\\Desktop\\\\setup-agents-mac10\\\\.worktrees\\\\wt-4"
   ],
   "skipDangerousModePermissionPrompt": true,
   "hooks": {

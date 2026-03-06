@@ -7,9 +7,10 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const db = require('./db');
+const instanceRegistry = require('./instance-registry');
 
 const REPO_RE = /^(https?:\/\/github\.com\/)?[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+(\.git)?$/;
-const SAFE_PATH_RE = /^\/[a-zA-Z0-9._\/ -]+$/;
+const SAFE_PATH_RE = /^(?:\/|[A-Za-z]:[\\/])[a-zA-Z0-9._\\/: -]+$/;
 
 let server = null;
 let wss = null;
@@ -30,6 +31,18 @@ function start(projectDir, port = 3100, scriptDir = null) {
 
   // Resolve scriptDir (mac10 repo root containing setup.sh)
   const resolvedScriptDir = scriptDir || path.join(__dirname, '..', '..');
+
+  // CORS -- allow cross-port requests from other mac10 GUI tabs
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
 
   // Serve static files
   const guiDir = process.env.MAC10_GUI_DIR || path.join(__dirname, '..', '..', 'gui', 'public');
@@ -448,6 +461,104 @@ function start(projectDir, port = 3100, scriptDir = null) {
     });
 
     res.json({ ok: true, message: 'Push started' });
+  });
+
+  // --- Instance management endpoints ---
+
+  app.get('/api/instances', (req, res) => {
+    try {
+      const instances = instanceRegistry.list();
+      res.json(instances.map(inst => ({
+        ...inst,
+        isSelf: inst.port === port,
+      })));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/instances/launch', async (req, res) => {
+    const { projectDir: reqDir, githubRepo, numWorkers } = req.body;
+    if (!reqDir) {
+      return res.status(400).json({ ok: false, error: 'projectDir is required' });
+    }
+    if (!SAFE_PATH_RE.test(reqDir)) {
+      return res.status(400).json({ ok: false, error: 'Invalid project directory path' });
+    }
+
+    // Check for duplicate
+    const existing = instanceRegistry.findByProject(reqDir);
+    if (existing) {
+      return res.status(409).json({ ok: false, error: 'A coordinator is already running for this project', port: existing.port });
+    }
+
+    try {
+      // Ensure project directory exists
+      fs.mkdirSync(reqDir, { recursive: true });
+
+      const newPort = await instanceRegistry.acquirePort(3100);
+      const env = { ...process.env, MAC10_PORT: String(newPort) };
+
+      const indexPath = path.join(__dirname, 'index.js');
+      const child = spawn('node', [indexPath, reqDir], {
+        env,
+        stdio: 'ignore',
+        detached: true,
+      });
+      child.unref();
+
+      // Wait for the new coordinator to start and register
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Seed config into the new coordinator's API
+      const configBody = JSON.stringify({
+        projectDir: reqDir,
+        githubRepo: githubRepo || '',
+        numWorkers: parseInt(numWorkers) || 4,
+      });
+      try {
+        const http = require('http');
+        await new Promise((resolve, reject) => {
+          const configReq = http.request({
+            hostname: '127.0.0.1', port: newPort, path: '/api/config',
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(configBody) },
+          }, (configRes) => { configRes.resume(); resolve(); });
+          configReq.on('error', reject);
+          configReq.write(configBody);
+          configReq.end();
+        });
+      } catch (e) {
+        console.error('Failed to seed config into new instance:', e.message);
+      }
+
+      const name = path.basename(reqDir);
+      db.log('gui', 'instance_launched', { projectDir: reqDir, port: newPort, githubRepo });
+      res.json({ ok: true, port: newPort, name });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/api/instances/stop', (req, res) => {
+    const { port: targetPort } = req.body;
+    if (!targetPort || targetPort === port) {
+      return res.status(400).json({ ok: false, error: 'Cannot stop self or missing port' });
+    }
+    try {
+      const instances = instanceRegistry.list();
+      const target = instances.find(i => i.port === targetPort);
+      if (!target) {
+        return res.status(404).json({ ok: false, error: 'Instance not found' });
+      }
+      try {
+        process.kill(target.pid, 'SIGTERM');
+      } catch {}
+      instanceRegistry.deregister(targetPort);
+      db.log('gui', 'instance_stopped', { port: targetPort, pid: target.pid });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   // WebSocket for live updates

@@ -5,26 +5,40 @@ const net = require('net');
 const path = require('path');
 const fs = require('fs');
 
-// Find project dir by walking up to find socket reference
-function findSocketPath() {
-  // Check MAC10_SOCKET env first
+// Connection target: either a socket path (string) or TCP config ({host, port})
+// Priority: Unix socket (fastest, native) > TCP bridge > Windows named pipe
+function findConnectionTarget() {
   if (process.env.MAC10_SOCKET) return process.env.MAC10_SOCKET;
 
   let dir = process.cwd();
   while (dir !== path.dirname(dir)) {
-    // On Windows, check for named pipe file
-    const pipeFile = path.join(dir, '.claude', 'state', 'mac10.pipe');
+    const stateDir = path.join(dir, '.claude', 'state');
+
+    // 1. Unix socket path redirect (WSL2/NTFS workaround — most reliable on WSL)
+    const sockPathFile = path.join(stateDir, 'mac10.sock.path');
+    if (fs.existsSync(sockPathFile)) {
+      const sockPath = fs.readFileSync(sockPathFile, 'utf8').trim();
+      // Verify the socket actually exists (avoid stale references)
+      try { if (fs.statSync(sockPath).isSocket()) return sockPath; } catch {}
+    }
+
+    // 2. Unix socket file directly
+    const sock = path.join(stateDir, 'mac10.sock');
+    try { if (fs.existsSync(sock) && fs.statSync(sock).isSocket()) return sock; } catch {}
+
+    // 3. TCP bridge (cross-environment: Git Bash ↔ WSL)
+    const tcpFile = path.join(stateDir, 'mac10.tcp.port');
+    if (fs.existsSync(tcpFile)) {
+      const port = parseInt(fs.readFileSync(tcpFile, 'utf8').trim());
+      if (port > 0) return { host: '127.0.0.1', port };
+    }
+
+    // 4. Windows named pipe (last — often stale when coordinator moves to WSL)
+    const pipeFile = path.join(stateDir, 'mac10.pipe');
     if (fs.existsSync(pipeFile)) {
       return fs.readFileSync(pipeFile, 'utf8').trim();
     }
-    // Check for redirected socket path (WSL2/NTFS workaround)
-    const sockPathFile = path.join(dir, '.claude', 'state', 'mac10.sock.path');
-    if (fs.existsSync(sockPathFile)) {
-      return fs.readFileSync(sockPathFile, 'utf8').trim();
-    }
-    // On Unix, check for socket file directly
-    const sock = path.join(dir, '.claude', 'state', 'mac10.sock');
-    if (fs.existsSync(sock)) return sock;
+
     dir = path.dirname(dir);
   }
   console.error('Error: mac10 coordinator not running (no socket found)');
@@ -32,11 +46,19 @@ function findSocketPath() {
   process.exit(1);
 }
 
-function send(socketPath, command, args) {
+// Backward-compatible alias
+function findSocketPath() { return findConnectionTarget(); }
+
+function send(target, command, args) {
   return new Promise((resolve, reject) => {
-    const conn = net.createConnection(socketPath, () => {
-      conn.write(JSON.stringify({ command, args }) + '\n');
-    });
+    // Connect via TCP ({host, port}) or Unix socket/named pipe (string)
+    const conn = typeof target === 'object'
+      ? net.createConnection(target.port, target.host, () => {
+          conn.write(JSON.stringify({ command, args }) + '\n');
+        })
+      : net.createConnection(target, () => {
+          conn.write(JSON.stringify({ command, args }) + '\n');
+        });
     let data = '';
     conn.on('data', (chunk) => {
       data += chunk.toString();
@@ -66,16 +88,22 @@ function send(socketPath, command, args) {
   });
 }
 
-function findSocketPathForProject(projectDir) {
-  const pipeFile = path.join(projectDir, '.claude', 'state', 'mac10.pipe');
+function findConnectionTargetForProject(projectDir) {
+  const stateDir = path.join(projectDir, '.claude', 'state');
+  const pipeFile = path.join(stateDir, 'mac10.pipe');
   if (fs.existsSync(pipeFile)) {
     return fs.readFileSync(pipeFile, 'utf8').trim();
   }
-  const sockPathFile = path.join(projectDir, '.claude', 'state', 'mac10.sock.path');
+  const tcpFile = path.join(stateDir, 'mac10.tcp.port');
+  if (fs.existsSync(tcpFile)) {
+    const port = parseInt(fs.readFileSync(tcpFile, 'utf8').trim());
+    if (port > 0) return { host: '127.0.0.1', port };
+  }
+  const sockPathFile = path.join(stateDir, 'mac10.sock.path');
   if (fs.existsSync(sockPathFile)) {
     return fs.readFileSync(sockPathFile, 'utf8').trim();
   }
-  const sock = path.join(projectDir, '.claude', 'state', 'mac10.sock');
+  const sock = path.join(stateDir, 'mac10.sock');
   if (fs.existsSync(sock)) return sock;
   console.error(`Error: mac10 coordinator not running for project: ${projectDir}`);
   process.exit(1);
@@ -136,7 +164,7 @@ async function main() {
     process.exit(0);
   }
 
-  const socketPath = projectOverride ? findSocketPathForProject(projectOverride) : findSocketPath();
+  const socketPath = projectOverride ? findConnectionTargetForProject(projectOverride) : findSocketPath();
 
   try {
     let result;
@@ -370,6 +398,26 @@ async function main() {
         } else console.error(result.error);
         break;
 
+      case 'check-overlaps':
+        result = await send(socketPath, 'check-overlaps', {
+          request_id: argv[1],
+        });
+        if (result.ok) {
+          if (result.overlaps.length === 0) {
+            console.log('No file overlaps detected.');
+          } else {
+            console.log(`\n=== File Overlaps for ${result.request_id} ===`);
+            for (const o of result.overlaps) {
+              const icon = o.severity === 'critical' ? 'CRITICAL' : o.severity === 'high' ? 'HIGH' : 'LOW';
+              console.log(`  [${icon}] Task #${o.task_a} ↔ Task #${o.task_b}`);
+              console.log(`    ${o.subject_a} ↔ ${o.subject_b}`);
+              console.log(`    Shared: ${o.shared_files.join(', ')}`);
+            }
+            console.log('');
+          }
+        } else console.error(result.error);
+        break;
+
       case 'integrate':
         result = await send(socketPath, 'integrate', {
           request_id: argv[1],
@@ -462,6 +510,7 @@ ALLOCATOR:
   assign-task <task_id> <worker_id>  Assign task to worker (atomic)
   worker-status                  Show all workers
   check-completion <request_id>  Check if all tasks for request are done
+  check-overlaps <request_id>   Show file overlaps between tasks
   integrate <request_id>         Trigger worktree merge/integration
 
 WORKER:

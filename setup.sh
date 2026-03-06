@@ -39,6 +39,15 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
   [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" 2>/dev/null
 fi
 
+# --- Detect environment ---
+IS_WSL=false
+IS_MSYS=false
+if grep -qi microsoft /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+  IS_WSL=true
+elif [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* ]]; then
+  IS_MSYS=true
+fi
+
 # --- Preflight checks ---
 
 echo "[1/8] Preflight checks..."
@@ -53,7 +62,10 @@ check_cmd() {
 check_cmd node
 check_cmd git
 check_cmd gh
-check_cmd tmux
+# tmux only required for WSL (worker sentinel uses tmux); native Windows uses Windows Terminal tabs
+if [ "$IS_WSL" = true ]; then
+  check_cmd tmux
+fi
 check_cmd claude
 
 NODE_VER=$(node -v | sed 's/v//' | cut -d. -f1)
@@ -62,8 +74,8 @@ if [ "$NODE_VER" -lt 18 ]; then
   exit 1
 fi
 
-# Check git repo
-if [ ! -d "$PROJECT_DIR/.git" ]; then
+# Check git repo (use git rev-parse to handle worktrees where .git is a file)
+if ! git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree &>/dev/null; then
   echo "ERROR: $PROJECT_DIR is not a git repository"
   exit 1
 fi
@@ -251,13 +263,20 @@ for i in $(seq 1 "$NUM_WORKERS"); do
   add_trusted "$WORKTREE_DIR/wt-$i"
 done
 
-# On Windows/WSL, also add Windows-format paths
-if grep -qi microsoft /proc/version 2>/dev/null; then
+# On Windows, also add Windows-format paths for trusted directories
+if [ "$IS_WSL" = true ]; then
   WIN_PROJECT=$(echo "$PROJECT_DIR" | sed 's|^/mnt/\(.\)|\U\1:|; s|/|\\\\|g')
   add_trusted "$WIN_PROJECT"
   for i in $(seq 1 "$NUM_WORKERS"); do
     WIN_WT=$(echo "$WORKTREE_DIR/wt-$i" | sed 's|^/mnt/\(.\)|\U\1:|; s|/|\\\\|g')
     add_trusted "$WIN_WT"
+  done
+elif [ "$IS_MSYS" = true ]; then
+  WIN_PROJECT="$(cygpath -w "$PROJECT_DIR" 2>/dev/null || true)"
+  [ -n "$WIN_PROJECT" ] && add_trusted "$WIN_PROJECT"
+  for i in $(seq 1 "$NUM_WORKERS"); do
+    WIN_WT="$(cygpath -w "$WORKTREE_DIR/wt-$i" 2>/dev/null || true)"
+    [ -n "$WIN_WT" ] && add_trusted "$WIN_WT"
   done
 fi
 
@@ -294,25 +313,34 @@ if [ "$ALREADY_RUNNING" = false ]; then
     echo "WARNING: Coordinator didn't create socket within 6s"
     echo "  Check logs or run: node $SCRIPT_DIR/coordinator/src/index.js $PROJECT_DIR"
   else
-    # Wait for coordinator to be responsive
-    for attempt in $(seq 1 5); do
-      if mac10 ping &>/dev/null 2>&1; then
+    echo "  Coordinator running (PID: $COORD_PID)"
+  fi
+fi
+
+# Wait for coordinator to be responsive (regardless of who started it)
+COORD_READY=false
+for attempt in $(seq 1 10); do
+  if mac10 ping &>/dev/null 2>&1; then
+    COORD_READY=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "$COORD_READY" = true ]; then
+  # Register workers (with retry) — always runs even if coordinator was pre-started
+  for i in $(seq 1 "$NUM_WORKERS"); do
+    for attempt in 1 2 3; do
+      if mac10 register-worker "$i" "$WORKTREE_DIR/wt-$i" "agent-$i" 2>/dev/null; then
+        echo "  Registered worker $i"
         break
       fi
       sleep 1
     done
-
-    # Register workers (with retry)
-    for i in $(seq 1 "$NUM_WORKERS"); do
-      for attempt in 1 2 3; do
-        if mac10 register-worker "$i" "$WORKTREE_DIR/wt-$i" "agent-$i" 2>/dev/null; then
-          break
-        fi
-        sleep 1
-      done
-    done
-    echo "  Coordinator running (PID: $COORD_PID)"
-  fi
+  done
+else
+  echo "WARNING: Coordinator not responsive — workers not registered"
+  echo "  Run manually: mac10 register-worker <id> <worktree_path> <branch>"
 fi
 
 # --- Launch all 3 masters ---
@@ -320,25 +348,46 @@ fi
 echo "Launching master agents..."
 
 LAUNCH_SCRIPT="$SCRIPT_DIR/scripts/launch-agent.sh"
-WT_EXE="/mnt/c/Users/$USER/AppData/Local/Microsoft/WindowsApps/wt.exe"
-if [ -f "$WT_EXE" ]; then
-  # Master-1 (Interface) — Sonnet
-  "$WT_EXE" -w 0 new-tab --title "Master-1 (Interface)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash "$LAUNCH_SCRIPT" "$PROJECT_DIR" sonnet /master-loop &
-  echo "  Master-1 (Interface/Sonnet) terminal opened."
 
-  sleep 1
-
-  # Master-2 (Architect) — Opus
-  "$WT_EXE" -w 0 new-tab --title "Master-2 (Architect)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash "$LAUNCH_SCRIPT" "$PROJECT_DIR" opus /architect-loop &
-  echo "  Master-2 (Architect/Opus) terminal opened."
-
-  sleep 1
-
-  # Master-3 (Allocator) — Sonnet
-  "$WT_EXE" -w 0 new-tab --title "Master-3 (Allocator)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash "$LAUNCH_SCRIPT" "$PROJECT_DIR" sonnet /allocate-loop &
-  echo "  Master-3 (Allocator/Sonnet) terminal opened."
+if [ "$IS_MSYS" = true ]; then
+  # Native Windows (Git Bash) — use wt.exe with bash.exe, no wsl.exe
+  WIN_LAUNCH_SCRIPT="$(cygpath -w "$LAUNCH_SCRIPT" 2>/dev/null || printf '%s' "$LAUNCH_SCRIPT")"
+  if command -v wt.exe >/dev/null 2>&1; then
+    wt.exe -w 0 new-tab --title "Master-1 (Interface)" bash.exe -l "$WIN_LAUNCH_SCRIPT" "$PROJECT_DIR" sonnet /master-loop &
+    echo "  Master-1 (Interface/Sonnet) terminal opened."
+    sleep 1
+    wt.exe -w 0 new-tab --title "Master-2 (Architect)" bash.exe -l "$WIN_LAUNCH_SCRIPT" "$PROJECT_DIR" opus /architect-loop &
+    echo "  Master-2 (Architect/Opus) terminal opened."
+    sleep 1
+    wt.exe -w 0 new-tab --title "Master-3 (Allocator)" bash.exe -l "$WIN_LAUNCH_SCRIPT" "$PROJECT_DIR" sonnet /allocate-loop &
+    echo "  Master-3 (Allocator/Sonnet) terminal opened."
+  else
+    echo "  Windows Terminal not found — start manually:"
+    echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model sonnet /master-loop"
+    echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model opus /architect-loop"
+    echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model sonnet /allocate-loop"
+  fi
+elif [ "$IS_WSL" = true ]; then
+  # WSL — use wt.exe with wsl.exe
+  WT_EXE="/mnt/c/Users/$USER/AppData/Local/Microsoft/WindowsApps/wt.exe"
+  if [ -f "$WT_EXE" ]; then
+    "$WT_EXE" -w 0 new-tab --title "Master-1 (Interface)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash "$LAUNCH_SCRIPT" "$PROJECT_DIR" sonnet /master-loop &
+    echo "  Master-1 (Interface/Sonnet) terminal opened."
+    sleep 1
+    "$WT_EXE" -w 0 new-tab --title "Master-2 (Architect)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash "$LAUNCH_SCRIPT" "$PROJECT_DIR" opus /architect-loop &
+    echo "  Master-2 (Architect/Opus) terminal opened."
+    sleep 1
+    "$WT_EXE" -w 0 new-tab --title "Master-3 (Allocator)" -- wsl.exe -d "$WSL_DISTRO_NAME" -- bash "$LAUNCH_SCRIPT" "$PROJECT_DIR" sonnet /allocate-loop &
+    echo "  Master-3 (Allocator/Sonnet) terminal opened."
+  else
+    echo "  Windows Terminal not found — start manually:"
+    echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model sonnet /master-loop"
+    echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model opus /architect-loop"
+    echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model sonnet /allocate-loop"
+  fi
 else
-  echo "  Windows Terminal not found — start manually:"
+  # macOS / Linux — use native terminal
+  echo "  Start manually in separate terminals:"
   echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model sonnet /master-loop"
   echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model opus /architect-loop"
   echo "    cd $PROJECT_DIR && claude --dangerously-skip-permissions --model sonnet /allocate-loop"
