@@ -34,21 +34,30 @@ function init(projectDir) {
   if (db) return db;
   const dbPath = getDbPath(projectDir);
   db = new Database(dbPath);
-  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-  db.exec(schema);
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
   db.pragma('foreign_keys = ON');
-  // Migrate: add claimed_by column if missing (added in 3-master update)
-  const cols = db.prepare("PRAGMA table_info(workers)").all().map(c => c.name);
-  if (!cols.includes('claimed_by')) {
-    db.exec("ALTER TABLE workers ADD COLUMN claimed_by TEXT");
+
+  // Run migrations BEFORE schema (schema creates indexes on columns that
+  // may not exist in older databases; migrations must add them first).
+  const existingTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(t => t.name);
+  if (existingTables.includes('workers')) {
+    const cols = db.prepare("PRAGMA table_info(workers)").all().map(c => c.name);
+    if (!cols.includes('claimed_by')) {
+      db.exec("ALTER TABLE workers ADD COLUMN claimed_by TEXT");
+    }
   }
-  // Migrate: add overlap_with column if missing
-  const taskCols = db.prepare("PRAGMA table_info(tasks)").all().map(c => c.name);
-  if (!taskCols.includes('overlap_with')) {
-    db.exec("ALTER TABLE tasks ADD COLUMN overlap_with TEXT");
+  if (existingTables.includes('tasks')) {
+    const taskCols = db.prepare("PRAGMA table_info(tasks)").all().map(c => c.name);
+    if (!taskCols.includes('overlap_with')) {
+      db.exec("ALTER TABLE tasks ADD COLUMN overlap_with TEXT");
+    }
   }
+
+  // Now safe to run full schema (CREATE TABLE IF NOT EXISTS + indexes)
+  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  db.exec(schema);
+
   // Store project dir in config
   db.prepare('UPDATE config SET value = ? WHERE key = ?').run(projectDir, 'project_dir');
   return db;
