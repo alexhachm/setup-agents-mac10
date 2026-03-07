@@ -3,6 +3,9 @@
 
   const MAX_RECONNECT_DELAY = 30000;
 
+  // --- Cached DOM helper ---
+  const _escapeDiv = document.createElement('div');
+
   // --- Multi-tab state ---
   const tabs = new Map(); // tabId -> tab state object
   let activeTabId = null;
@@ -57,6 +60,10 @@
       if (tab.id === activeTabId) updateConnectionIndicator(true);
     };
 
+    tab.ws.onerror = (err) => {
+      console.error('WebSocket error (port ' + tab.port + '):', err);
+    };
+
     tab.ws.onclose = () => {
       tab.connected = false;
       renderTabBar();
@@ -103,26 +110,33 @@
   }
 
   function updateConnectionIndicator(connected) {
-    document.getElementById('status-indicator').className = 'status-dot ' + (connected ? 'connected' : 'disconnected');
-    document.getElementById('status-text').textContent = connected ? 'Connected' : 'Disconnected';
+    const dot = document.getElementById('status-indicator');
+    const text = document.getElementById('status-text');
+    dot.className = 'status-dot ' + (connected ? 'connected' : 'disconnected');
+    dot.setAttribute('aria-label', connected ? 'Connected' : 'Disconnected');
+    text.textContent = connected ? 'Connected' : 'Disconnected';
   }
 
   // --- Tab bar rendering ---
   function renderTabBar() {
     const list = document.getElementById('tab-list');
-    list.innerHTML = '';
+    const frag = document.createDocumentFragment();
     for (const [id, tab] of tabs) {
       const el = document.createElement('div');
       el.className = 'tab-item' + (id === activeTabId ? ' active' : '');
+      el.setAttribute('role', 'tab');
+      el.setAttribute('aria-selected', id === activeTabId ? 'true' : 'false');
       el.innerHTML =
-        `<span class="tab-dot ${tab.connected ? 'connected' : 'disconnected'}"></span>` +
+        `<span class="tab-dot ${tab.connected ? 'connected' : 'disconnected'}" aria-label="${tab.connected ? 'Connected' : 'Disconnected'}"></span>` +
         `<span class="tab-name">${escapeHtml(tab.name)}</span>` +
-        `<button class="tab-close" title="Close tab">&times;</button>`;
+        `<button class="tab-close" title="Close tab" aria-label="Close ${escapeHtml(tab.name)} tab">&times;</button>`;
       el.querySelector('.tab-name').addEventListener('click', () => switchTab(id));
       el.querySelector('.tab-dot').addEventListener('click', () => switchTab(id));
       el.querySelector('.tab-close').addEventListener('click', (e) => { e.stopPropagation(); closeTab(id); });
-      list.appendChild(el);
+      frag.appendChild(el);
     }
+    list.innerHTML = '';
+    list.appendChild(frag);
   }
 
   function switchTab(tabId) {
@@ -271,7 +285,7 @@
 
   function renderLog(logs) {
     const el = document.getElementById('log-list');
-    el.innerHTML = logs.reverse().slice(0, 50).map(l => `
+    el.innerHTML = logs.slice().reverse().slice(0, 50).map(l => `
       <div class="log-entry">
         <span class="log-time">${escapeHtml(l.created_at)}</span>
         <span class="log-actor">${escapeHtml(l.actor)}</span>
@@ -282,9 +296,8 @@
   }
 
   function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    _escapeDiv.textContent = str;
+    return _escapeDiv.innerHTML;
   }
 
   function safeUrl(url) {
@@ -924,6 +937,24 @@
     if (!tab) return;
     tab.changesDomainFilter = this.value;
     renderChanges(tab);
+  });
+
+  // --- Keyboard shortcuts ---
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (modal.style.display !== 'none') {
+        modal.style.display = 'none';
+      }
+      closeSettingsPanel();
+    }
+  });
+
+  // --- Cleanup on unload ---
+  window.addEventListener('beforeunload', () => {
+    if (instancePollTimer) clearInterval(instancePollTimer);
+    for (const [, tab] of tabs) {
+      disconnectTab(tab);
+    }
   });
 
   // --- Initial load ---

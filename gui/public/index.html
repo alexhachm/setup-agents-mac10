@@ -3,22 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0d1117">
+  <meta name="description" content="mac10 multi-agent coordination dashboard">
   <title>mac10 Dashboard</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header>
+  <header role="banner">
     <h1>mac10</h1>
-    <span id="status-indicator" class="status-dot disconnected"></span>
-    <span id="status-text">Connecting...</span>
+    <span id="status-indicator" class="status-dot disconnected" role="status" aria-label="Disconnected"></span>
+    <span id="status-text" aria-live="polite">Connecting...</span>
   </header>
 
-  <nav id="tab-bar">
-    <div id="tab-list"></div>
-    <button id="add-tab-btn" title="Add project">+</button>
+  <nav id="tab-bar" aria-label="Project tabs">
+    <div id="tab-list" role="tablist"></div>
+    <button id="add-tab-btn" title="Add project" aria-label="Add project">+</button>
   </nav>
 
-  <main>
+  <main role="main">
     <section id="setup-panel">
       <div id="setup-header">
         <h2>Setup</h2>
@@ -58,8 +60,8 @@
       </div>
     </section>
 
-    <section id="request-form">
-      <input type="text" id="request-input" placeholder="Describe your coding request..." />
+    <section id="request-form" role="search">
+      <input type="text" id="request-input" placeholder="Describe your coding request..." aria-label="Coding request description" />
       <button id="request-btn">Submit Request</button>
     </section>
 
@@ -140,7 +142,7 @@
       <div class="settings-panel-items"></div>
     </div>
 
-    <div id="add-project-modal" class="modal" style="display:none">
+    <div id="add-project-modal" class="modal" style="display:none" role="dialog" aria-modal="true" aria-label="Add project">
       <div class="modal-content">
         <h3>Add Project</h3>
         <div class="modal-field">
