@@ -144,5 +144,14 @@ console.log('Merger running.');
   console.log('mac10 coordinator ready.');
 })();
 
-// Keep alive
-setInterval(() => {}, 60000);
+// Crash handlers — log and exit cleanly instead of dying silently
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+  try { db.log('coordinator', 'uncaught_exception', { error: err.message, stack: err.stack }); } catch {}
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  console.error('Unhandled rejection:', msg);
+  try { db.log('coordinator', 'unhandled_rejection', { error: msg }); } catch {}
+});
