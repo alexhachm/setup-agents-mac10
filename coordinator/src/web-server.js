@@ -16,6 +16,7 @@ let server = null;
 let wss = null;
 let setupProcess = null;
 let broadcastIntervalId = null;
+let pingIntervalId = null;
 
 function start(projectDir, port = 3100, scriptDir = null) {
   const app = express();
@@ -103,7 +104,7 @@ function start(projectDir, port = 3100, scriptDir = null) {
 
   app.get('/api/log', (req, res) => {
     try {
-      const limit = parseInt(req.query.limit) || 100;
+      const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
       res.json(db.getLog(limit, req.query.actor));
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -112,7 +113,11 @@ function start(projectDir, port = 3100, scriptDir = null) {
 
   app.post('/api/request', (req, res) => {
     try {
-      const id = db.createRequest(req.body.description);
+      const { description } = req.body;
+      if (!description || typeof description !== 'string') {
+        return res.status(400).json({ ok: false, error: 'description is required and must be a string' });
+      }
+      const id = db.createRequest(description);
       res.json({ ok: true, request_id: id });
       broadcast({ type: 'request_created', request_id: id });
     } catch (e) {
@@ -515,8 +520,10 @@ function start(projectDir, port = 3100, scriptDir = null) {
     }
 
     try {
-      // Ensure project directory exists
-      fs.mkdirSync(reqDir, { recursive: true });
+      // Validate project directory exists (do not create arbitrary directories)
+      if (!fs.existsSync(reqDir)) {
+        return res.status(400).json({ ok: false, error: 'Project directory does not exist' });
+      }
 
       const newPort = await instanceRegistry.acquirePort(3100);
       const env = { ...process.env, MAC10_PORT: String(newPort) };
@@ -549,7 +556,6 @@ function start(projectDir, port = 3100, scriptDir = null) {
         numWorkers: parseInt(numWorkers) || 4,
       });
       try {
-        const http = require('http');
         await new Promise((resolve, reject) => {
           const configReq = http.request({
             hostname: '127.0.0.1', port: newPort, path: '/api/config',
@@ -581,6 +587,9 @@ function start(projectDir, port = 3100, scriptDir = null) {
       const target = instances.find(i => i.port === targetPort);
       if (!target) {
         return res.status(404).json({ ok: false, error: 'Instance not found' });
+      }
+      if (!Number.isInteger(target.pid) || target.pid <= 0) {
+        return res.status(400).json({ ok: false, error: 'Invalid PID for target instance' });
       }
       try {
         process.kill(target.pid, 'SIGTERM');
@@ -647,6 +656,10 @@ function start(projectDir, port = 3100, scriptDir = null) {
 
   // WebSocket for live updates
   wss.on('connection', (ws) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+    ws.on('error', () => {}); // prevent unhandled error crashes
+
     // Send initial state
     try {
       ws.send(JSON.stringify({
@@ -671,6 +684,16 @@ function start(projectDir, port = 3100, scriptDir = null) {
       },
     });
   }, 2000);
+
+  // Ping/pong to detect and terminate stale WebSocket connections
+  pingIntervalId = setInterval(() => {
+    if (!wss) return;
+    wss.clients.forEach((ws) => {
+      if (!ws.isAlive) { ws.terminate(); return; }
+      ws.isAlive = false;
+      try { ws.ping(); } catch {}
+    });
+  }, 30000);
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -700,6 +723,7 @@ function broadcast(data) {
 
 function stop() {
   if (broadcastIntervalId) { clearInterval(broadcastIntervalId); broadcastIntervalId = null; }
+  if (pingIntervalId) { clearInterval(pingIntervalId); pingIntervalId = null; }
   if (setupProcess) {
     try { setupProcess.kill(); } catch {}
     setupProcess = null;

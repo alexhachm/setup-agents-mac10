@@ -3,6 +3,8 @@
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const db = require('./db');
 
 let server = null;
@@ -52,7 +54,17 @@ const COMMAND_SCHEMAS = {
   },
   'list-changes':      { required: [], types: { domain: 'string', status: 'string' } },
   'update-change':     { required: ['id'], types: { id: 'number' } },
+  'integrate':         { required: ['request_id'], types: { request_id: 'string' } },
 };
+
+/** Parse a files field into an array. Handles arrays, JSON strings, and comma-separated strings. */
+function parseFilesField(files) {
+  if (Array.isArray(files)) return files;
+  if (typeof files === 'string') {
+    try { return JSON.parse(files); } catch { return files.split(',').map(f => f.trim()); }
+  }
+  return null;
+}
 
 function validateCommand(cmd) {
   const { command, args } = cmd;
@@ -88,14 +100,12 @@ function getSocketPath(projectDir) {
   fs.mkdirSync(dir, { recursive: true });
   if (process.platform === 'win32') {
     // Windows: use named pipes (Unix sockets have limited support)
-    const crypto = require('crypto');
     const hash = crypto.createHash('md5').update(projectDir).digest('hex').slice(0, 12);
     const pipePath = `\\\\.\\pipe\\mac10-${hash}`;
     fs.writeFileSync(path.join(dir, 'mac10.pipe'), pipePath, 'utf8');
     return pipePath;
   }
   // On WSL2, /mnt/c/ (NTFS) doesn't support Unix sockets — use /tmp/ instead
-  const crypto = require('crypto');
   const hash = crypto.createHash('md5').update(projectDir).digest('hex').slice(0, 12);
   const sockPath = `/tmp/mac10-${hash}.sock`;
   // Write the socket path so the CLI can find it
@@ -127,6 +137,16 @@ function createConnectionHandler(handlers) {
         }
       }
     });
+    conn.on('end', () => {
+      // Process any remaining complete line in the buffer
+      if (data.trim()) {
+        try {
+          const cmd = JSON.parse(data);
+          validateCommand(cmd);
+          handleCommand(cmd, conn, handlers);
+        } catch {} // connection closing — best effort
+      }
+    });
     conn.on('error', () => {}); // ignore broken pipe
   };
 }
@@ -150,8 +170,7 @@ function start(projectDir, handlers) {
 
   // TCP bridge: allows cross-environment access (Git Bash ↔ WSL, remote agents)
   // Derive a stable per-project port from the same hash used for sockets (range 31000-31999)
-  const crypto2 = require('crypto');
-  const portHash = crypto2.createHash('md5').update(projectDir).digest('hex');
+  const portHash = crypto.createHash('md5').update(projectDir).digest('hex');
   const derivedPort = 31000 + (parseInt(portHash.slice(0, 4), 16) % 1000);
   const tcpPort = parseInt(process.env.MAC10_CLI_PORT) || derivedPort;
   const stateDir = path.join(projectDir, '.claude', 'state');
@@ -252,7 +271,7 @@ function handleCommand(cmd, conn, handlers) {
         }
         // Detect file overlaps with other tasks in the same request
         let overlaps = [];
-        const taskFiles = Array.isArray(args.files) ? args.files : (typeof args.files === 'string' ? (() => { try { return JSON.parse(args.files); } catch { return args.files.split(',').map(f => f.trim()); } })() : null);
+        const taskFiles = parseFilesField(args.files);
         if (taskFiles && taskFiles.length > 0) {
           overlaps = db.findOverlappingTasks(args.request_id, taskFiles);
           if (overlaps.length > 0) {
@@ -601,7 +620,6 @@ function handleCommand(cmd, conn, handlers) {
           respond(conn, { ok: false, error: 'project_dir not set in config' });
           break;
         }
-        const { execFileSync } = require('child_process');
         const wtDir = path.join(projDir, '.worktrees');
         const wtPath = path.join(wtDir, `wt-${nextId}`);
         const branchName = `agent-${nextId}`;
