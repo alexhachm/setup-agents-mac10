@@ -302,50 +302,48 @@ function escalateToAllocator(entry, error, isFunctional) {
   });
 }
 
-function checkPrState(prUrl, projectDir) {
+function isBranchInWorktree(branch, projectDir) {
   try {
-    const state = safeExec('gh', ['pr', 'view', prUrl, '--json', 'state', '-q', '.state'], projectDir);
-    return state;
+    const output = safeExec('git', ['worktree', 'list', '--porcelain'], projectDir);
+    // Porcelain format has "branch refs/heads/<name>" lines
+    return output.includes(`branch refs/heads/${branch}`);
   } catch {
-    return null;
+    return false;
+  }
+}
+
+function isPrMerged(prUrl, projectDir) {
+  try {
+    const state = safeExec('gh', ['pr', 'view', prUrl, '--json', 'state', '--jq', '.state'], projectDir);
+    return state === 'MERGED';
+  } catch {
+    return false;
   }
 }
 
 function tryCleanMerge(entry, projectDir) {
+  // Skip --delete-branch if the branch is checked out in a worktree
+  const skipDeleteBranch = entry.branch && isBranchInWorktree(entry.branch, projectDir);
+  const mergeArgs = ['pr', 'merge', entry.pr_url, '--merge'];
+  if (!skipDeleteBranch) {
+    mergeArgs.push('--delete-branch');
+  }
+
   try {
-    // Merge PR via gh CLI
-    safeExec('gh', ['pr', 'merge', entry.pr_url, '--merge', '--delete-branch'], projectDir);
+    safeExec('gh', mergeArgs, projectDir);
     return { success: true };
   } catch (e) {
-    const errMsg = e.message || '';
-    const isWorktreeBranchError = /cannot delete branch.*used by worktree/i.test(errMsg);
-
-    if (isWorktreeBranchError) {
-      // Branch deletion failed because it's checked out in a worktree.
-      // The PR merge itself may have succeeded — verify on GitHub.
-      const state = checkPrState(entry.pr_url, projectDir);
-      if (state === 'MERGED') {
-        db.log('coordinator', 'merge_branch_delete_skipped', {
-          branch: entry.branch,
-          pr_url: entry.pr_url,
-          reason: 'branch checked out in worktree',
-        });
-        return { success: true };
-      }
-    }
-
-    // Also handle the case where the PR was merged externally
-    // (e.g., by another process or manually) but gh pr merge failed
-    const state = checkPrState(entry.pr_url, projectDir);
-    if (state === 'MERGED') {
-      db.log('coordinator', 'merge_already_merged', {
+    // gh pr merge can fail on post-merge cleanup (e.g. branch deletion)
+    // even though the PR was actually merged. Check the real state.
+    if (isPrMerged(entry.pr_url, projectDir)) {
+      db.log('coordinator', 'merge_post_cleanup_warning', {
+        merge_id: entry.id,
         branch: entry.branch,
-        pr_url: entry.pr_url,
+        warning: e.message,
       });
       return { success: true };
     }
-
-    return { success: false, error: errMsg };
+    return { success: false, error: e.message };
   }
 }
 
