@@ -22,6 +22,8 @@ function safeExec(file, args, cwd) {
 }
 
 let processing = false;
+let processingStartedAt = 0;
+const PROCESSING_TIMEOUT_MS = 300000; // 5 minutes — reset flag if stuck
 let mergerIntervalId = null;
 
 function start(projectDir) {
@@ -69,8 +71,14 @@ function onTaskCompleted(taskId) {
 }
 
 function processQueue(projectDir) {
+  // Reset processing flag if stuck beyond timeout
+  if (processing && processingStartedAt > 0 && (Date.now() - processingStartedAt) > PROCESSING_TIMEOUT_MS) {
+    db.log('coordinator', 'merger_processing_timeout', { stuck_ms: Date.now() - processingStartedAt });
+    processing = false;
+  }
   if (processing) return;
   processing = true;
+  processingStartedAt = Date.now();
 
   try {
     const entry = db.getNextMerge();
@@ -179,7 +187,16 @@ function tryRebase(entry, projectDir) {
     if (wtPath) {
       // Rebase directly in worktree (branch already checked out)
       safeExec('git', ['rebase', 'origin/main'], wtPath);
-      safeExec('git', ['push', '--force-with-lease', 'origin', entry.branch], wtPath);
+      try {
+        safeExec('git', ['push', '--force-with-lease', 'origin', entry.branch], wtPath);
+      } catch (pushErr) {
+        // Rebase succeeded but push failed — log for diagnosis
+        db.log('coordinator', 'rebase_push_failed', {
+          branch: entry.branch,
+          error: pushErr.message,
+        });
+        throw pushErr;
+      }
     } else {
       // Fallback: old behavior (will fail if worktree holds the branch)
       safeExec('git', ['checkout', entry.branch], projectDir);
@@ -235,6 +252,14 @@ function runOverlapValidation(entry, projectDir) {
       if (typeof validation === 'string' && validation.trim()) {
         const parts = validation.trim().split(/\s+/);
         safeExec(parts[0], parts.slice(1), validationDir);
+      } else if (typeof validation === 'object' && validation !== null) {
+        // Handle structured validation: { test_cmd, build_cmd, lint_cmd }
+        for (const key of ['build_cmd', 'test_cmd', 'lint_cmd']) {
+          if (validation[key] && typeof validation[key] === 'string') {
+            const parts = validation[key].trim().split(/\s+/);
+            safeExec(parts[0], parts.slice(1), validationDir);
+          }
+        }
       }
     }
 

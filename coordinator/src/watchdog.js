@@ -2,10 +2,11 @@
 
 const db = require('./db');
 const tmux = require('./tmux');
-const { execSync } = require('child_process');
 
 let intervalId = null;
 let lastMailPurge = 0;
+// Track last escalation level per worker to avoid duplicate nudge/triage mails
+const lastEscalationLevel = new Map();
 
 // Escalation thresholds (seconds since last heartbeat)
 const THRESHOLDS = {
@@ -31,6 +32,7 @@ function start(projectDir) {
 
 function stop() {
   if (intervalId) { clearInterval(intervalId); intervalId = null; }
+  lastEscalationLevel.clear();
 }
 
 function tick(projectDir) {
@@ -38,8 +40,11 @@ function tick(projectDir) {
   const now = Date.now();
 
   for (const worker of workers) {
-    // Skip idle workers
-    if (worker.status === 'idle') continue;
+    // Skip idle workers and clear their escalation tracking
+    if (worker.status === 'idle') {
+      lastEscalationLevel.delete(worker.id);
+      continue;
+    }
 
     // ZFC death detection: check if tmux pane is actually alive
     const windowName = `worker-${worker.id}`;
@@ -107,31 +112,34 @@ function tick(projectDir) {
 
 function escalate(worker, staleSec, projectDir) {
   const windowName = `worker-${worker.id}`;
+  const prevLevel = lastEscalationLevel.get(worker.id) || 0;
 
   if (staleSec >= THRESHOLDS.terminate) {
-    // Level 4: Terminate and reassign
+    // Level 4: Terminate and reassign (always fires — destructive action)
     db.log('coordinator', 'watchdog_terminate', {
       worker_id: worker.id,
       stale_sec: staleSec,
     });
     tmux.killWindow(windowName);
     handleDeath(worker, 'heartbeat_timeout');
+    lastEscalationLevel.delete(worker.id);
 
-  } else if (staleSec >= THRESHOLDS.triage) {
-    // Level 3: Triage — capture output, log for analysis
+  } else if (staleSec >= THRESHOLDS.triage && prevLevel < 3) {
+    // Level 3: Triage — capture output, log for analysis (once per escalation)
+    lastEscalationLevel.set(worker.id, 3);
     const output = tmux.capturePane(windowName, 20);
     db.log('coordinator', 'watchdog_triage', {
       worker_id: worker.id,
       stale_sec: staleSec,
       last_output: output.slice(-500),
     });
-    // Send nudge as reminder
     db.sendMail(`worker-${worker.id}`, 'nudge', {
       message: 'Heartbeat stale. Send heartbeat or complete task.',
     });
 
-  } else if (staleSec >= THRESHOLDS.nudge) {
-    // Level 2: Nudge — send reminder
+  } else if (staleSec >= THRESHOLDS.nudge && prevLevel < 2) {
+    // Level 2: Nudge — send reminder (once per escalation)
+    lastEscalationLevel.set(worker.id, 2);
     db.sendMail(`worker-${worker.id}`, 'nudge', {
       message: 'Heartbeat check — please report status.',
     });
@@ -140,8 +148,9 @@ function escalate(worker, staleSec, projectDir) {
       stale_sec: staleSec,
     });
 
-  } else if (staleSec >= THRESHOLDS.warn) {
-    // Level 1: Warn — log only
+  } else if (staleSec >= THRESHOLDS.warn && prevLevel < 1) {
+    // Level 1: Warn — log only (once per escalation)
+    lastEscalationLevel.set(worker.id, 1);
     db.log('coordinator', 'watchdog_warn', {
       worker_id: worker.id,
       stale_sec: staleSec,
@@ -263,9 +272,10 @@ function recoverStaleIntegrations(now) {
     }
 
     // Check for merges stuck in 'merging' for > 5 minutes → timeout them
+    // Use updated_at (when status changed to 'merging'), not created_at (when enqueued)
     for (const m of merges) {
-      if (m.status === 'merging' && m.created_at) {
-        const mergeAge = (now - new Date(m.created_at).getTime()) / 1000;
+      if (m.status === 'merging' && (m.updated_at || m.created_at)) {
+        const mergeAge = (now - new Date(m.updated_at || m.created_at).getTime()) / 1000;
         if (mergeAge > 300) { // 5 minutes
           db.updateMerge(m.id, { status: 'failed', error: 'Merge timed out after 5 minutes' });
           db.log('coordinator', 'merge_timeout', { merge_id: m.id, request_id: req.id });

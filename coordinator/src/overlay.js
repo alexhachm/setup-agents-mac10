@@ -40,8 +40,11 @@ function buildTaskOverlay(task, worker, projectDir) {
   ];
 
   if (task.files) {
-    const files = typeof task.files === 'string' ? JSON.parse(task.files) : task.files;
-    if (files.length > 0) {
+    let files;
+    try {
+      files = typeof task.files === 'string' ? JSON.parse(task.files) : task.files;
+    } catch { files = []; }
+    if (Array.isArray(files) && files.length > 0) {
       lines.push('## Files to Modify');
       lines.push('');
       for (const f of files) lines.push(`- ${f}`);
@@ -50,14 +53,19 @@ function buildTaskOverlay(task, worker, projectDir) {
   }
 
   if (task.validation) {
-    const val = typeof task.validation === 'string' ? JSON.parse(task.validation) : task.validation;
-    lines.push('## Validation');
-    lines.push('');
-    if (val.build_cmd) lines.push(`- Build: \`${val.build_cmd}\``);
-    if (val.test_cmd) lines.push(`- Test: \`${val.test_cmd}\``);
-    if (val.lint_cmd) lines.push(`- Lint: \`${val.lint_cmd}\``);
-    if (val.custom) lines.push(`- Custom: ${val.custom}`);
-    lines.push('');
+    let val;
+    try {
+      val = typeof task.validation === 'string' ? JSON.parse(task.validation) : task.validation;
+    } catch { val = null; }
+    if (val) {
+      lines.push('## Validation');
+      lines.push('');
+      if (val.build_cmd) lines.push(`- Build: \`${val.build_cmd}\``);
+      if (val.test_cmd) lines.push(`- Test: \`${val.test_cmd}\``);
+      if (val.lint_cmd) lines.push(`- Lint: \`${val.lint_cmd}\``);
+      if (val.custom) lines.push(`- Custom: ${val.custom}`);
+      lines.push('');
+    }
   }
 
   // Add knowledge context if available
