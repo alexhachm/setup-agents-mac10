@@ -466,7 +466,7 @@ async function main() {
 
       case 'repair':
         result = await send(socketPath, 'repair', {});
-        if (result.ok) console.log(`Repaired: ${result.reset_workers} workers, ${result.orphaned_tasks} tasks`);
+        if (result.ok) console.log(`Repaired: ${result.reset_workers} workers, ${result.orphaned_tasks} tasks, ${result.reset_merges} merges`);
         else console.error(result.error);
         break;
 
@@ -484,6 +484,12 @@ async function main() {
         result = await send(socketPath, 'add-worker', {});
         if (result.ok) console.log(`Worker ${result.worker_id} created (${result.worktree_path}, branch: ${result.branch})`);
         else console.error(`Error: ${result.error}`);
+        break;
+
+      case 'reset-merges':
+        result = await send(socketPath, 'reset-merges', { request_id: argv[1] || undefined });
+        if (result.ok) console.log(`Reset ${result.reset_count} conflict merge(s) to pending.`);
+        else console.error(result.error);
         break;
 
       case 'merge-status':
@@ -599,6 +605,7 @@ SYSTEM:
   stop                           Stop coordinator
   repair                         Fix stuck state
   add-worker                     Create a new worker worktree (up to max_workers)
+  reset-merges [request_id]      Reset stuck conflict merges to pending
   merge-status [request_id]      Show merge queue entries
   gui                            Show dashboard URL
   ping                           Check coordinator health

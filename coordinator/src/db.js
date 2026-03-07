@@ -352,6 +352,23 @@ function updateMerge(id, fields) {
   getDb().prepare(`UPDATE merge_queue SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
 }
 
+function resetMerges(requestId) {
+  const d = getDb();
+  let result;
+  if (requestId) {
+    result = d.prepare(`
+      UPDATE merge_queue SET status = 'pending', error = NULL
+      WHERE status = 'conflict'
+        AND task_id IN (SELECT id FROM tasks WHERE request_id = ?)
+    `).run(requestId);
+  } else {
+    result = d.prepare(
+      "UPDATE merge_queue SET status = 'pending', error = NULL WHERE status = 'conflict'"
+    ).run();
+  }
+  return result.changes;
+}
+
 // --- Activity log ---
 
 function log(actor, action, details = {}) {
@@ -537,7 +554,7 @@ module.exports = {
   createTask, getTask, updateTask, listTasks, getReadyTasks, checkAndPromoteTasks,
   registerWorker, getWorker, updateWorker, getIdleWorkers, getAllWorkers, claimWorker, releaseWorker, checkRequestCompletion,
   sendMail, checkMail, checkMailBlocking, purgeOldMail,
-  enqueueMerge, getNextMerge, updateMerge,
+  enqueueMerge, getNextMerge, updateMerge, resetMerges,
   log, getLog,
   getConfig, setConfig,
   savePreset, listPresets, getPreset, deletePreset,

@@ -55,6 +55,7 @@ const COMMAND_SCHEMAS = {
   'list-changes':      { required: [], types: { domain: 'string', status: 'string' } },
   'update-change':     { required: ['id'], types: { id: 'number' } },
   'integrate':         { required: ['request_id'], types: { request_id: 'string' } },
+  'reset-merges':      { required: [], types: { request_id: 'string' } },
 };
 
 /** Parse a files field into an array. Handles arrays, JSON strings, and comma-separated strings. */
@@ -592,8 +593,9 @@ function handleCommand(cmd, conn, handlers) {
         const cutoff = new Date(Date.now() - 3 * 60 * 1000).toISOString();
         const stuck = db.getDb().prepare("UPDATE workers SET status = 'idle', current_task_id = NULL WHERE status IN ('assigned','running','busy') AND last_heartbeat < ?").run(cutoff);
         const orphaned = db.getDb().prepare("UPDATE tasks SET status = 'ready', assigned_to = NULL WHERE status IN ('assigned','in_progress') AND assigned_to IN (SELECT id FROM workers WHERE status = 'idle')").run();
-        db.log('coordinator', 'repair', { reset_workers: stuck.changes, orphaned_tasks: orphaned.changes });
-        respond(conn, { ok: true, reset_workers: stuck.changes, orphaned_tasks: orphaned.changes });
+        const resetMergeCount = db.resetMerges();
+        db.log('coordinator', 'repair', { reset_workers: stuck.changes, orphaned_tasks: orphaned.changes, reset_merges: resetMergeCount });
+        respond(conn, { ok: true, reset_workers: stuck.changes, orphaned_tasks: orphaned.changes, reset_merges: resetMergeCount });
         break;
       }
       case 'ping': {
@@ -702,6 +704,13 @@ function handleCommand(cmd, conn, handlers) {
           db.log(`worker-${resetWid}`, 'sentinel_reset', { previous_status: resetWorker.status });
         }
         respond(conn, { ok: true });
+        break;
+      }
+
+      case 'reset-merges': {
+        const resetCount = db.resetMerges(args.request_id || null);
+        db.log('coordinator', 'reset_merges', { request_id: args.request_id || 'all', count: resetCount });
+        respond(conn, { ok: true, reset_count: resetCount });
         break;
       }
 
