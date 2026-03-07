@@ -8,13 +8,20 @@ WORKER_ID="${1:?Usage: worker-sentinel.sh <worker_id> <project_dir>}"
 PROJECT_DIR="${2:?Usage: worker-sentinel.sh <worker_id> <project_dir>}"
 WORKTREE="$PROJECT_DIR/.worktrees/wt-$WORKER_ID"
 
-cd "$WORKTREE" || { echo "Worktree not found: $WORKTREE"; exit 1; }
+if [ ! -d "$WORKTREE" ]; then
+  echo "[sentinel-$WORKER_ID] ERROR: Worktree not found: $WORKTREE" >&2
+  exit 1
+fi
+cd "$WORKTREE"
 
 # Ensure mac10 CLI is on PATH
 export PATH="$PROJECT_DIR/.claude/scripts:$PATH"
 
-cleanup() { mac10 heartbeat "$WORKER_ID" 2>/dev/null; }
-trap cleanup EXIT
+cleanup() {
+  echo "[sentinel-$WORKER_ID] Cleaning up..."
+  mac10 reset-worker "$WORKER_ID" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
 
 echo "[sentinel-$WORKER_ID] Ready in $WORKTREE"
 
@@ -42,5 +49,8 @@ while true; do
     # Reset worker status to idle after Claude exits
     echo "[sentinel-$WORKER_ID] Claude exited, resetting to idle..."
     mac10 reset-worker "$WORKER_ID" 2>/dev/null || true
+  else
+    # No task received (timeout or empty response) — loop to wait again
+    echo "[sentinel-$WORKER_ID] No task received, retrying..."
   fi
 done

@@ -8,6 +8,16 @@ PROJECT_DIR="${1:?Usage: bash setup.sh <project_dir> [num_workers]}"
 NUM_WORKERS="${2:-4}"
 MAX_WORKERS=8
 
+# Validate NUM_WORKERS is a positive integer within bounds
+if ! [[ "$NUM_WORKERS" =~ ^[0-9]+$ ]] || [ "$NUM_WORKERS" -lt 1 ]; then
+  echo "ERROR: num_workers must be a positive integer (got: $NUM_WORKERS)"
+  exit 1
+fi
+if [ "$NUM_WORKERS" -gt "$MAX_WORKERS" ]; then
+  echo "ERROR: num_workers cannot exceed $MAX_WORKERS (got: $NUM_WORKERS)"
+  exit 1
+fi
+
 # Resolve to absolute path
 PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd || echo "$PROJECT_DIR")"
 
@@ -292,7 +302,7 @@ SOCK_PATH_FILE="$CLAUDE_DIR/state/mac10.sock.path"
 if [ -f "$SOCK_PATH_FILE" ] && [ -S "$(cat "$SOCK_PATH_FILE" 2>/dev/null)" ]; then
   ALREADY_RUNNING=true
   echo "  Coordinator already running, skipping start."
-elif mac10 ping &>/dev/null 2>&1; then
+elif mac10 ping &>/dev/null; then
   ALREADY_RUNNING=true
   echo "  Coordinator already running, skipping start."
 fi
@@ -320,7 +330,7 @@ fi
 # Wait for coordinator to be responsive (regardless of who started it)
 COORD_READY=false
 for attempt in $(seq 1 10); do
-  if mac10 ping &>/dev/null 2>&1; then
+  if mac10 ping &>/dev/null; then
     COORD_READY=true
     break
   fi

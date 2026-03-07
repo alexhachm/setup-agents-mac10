@@ -29,7 +29,7 @@ function findConnectionTarget() {
     // 3. TCP bridge (cross-environment: Git Bash ↔ WSL)
     const tcpFile = path.join(stateDir, 'mac10.tcp.port');
     if (fs.existsSync(tcpFile)) {
-      const port = parseInt(fs.readFileSync(tcpFile, 'utf8').trim());
+      const port = parseInt(fs.readFileSync(tcpFile, 'utf8').trim(), 10);
       if (port > 0) return { host: '127.0.0.1', port };
     }
 
@@ -46,65 +46,76 @@ function findConnectionTarget() {
   process.exit(1);
 }
 
-// Backward-compatible alias
-function findSocketPath() { return findConnectionTarget(); }
-
 function send(target, command, args) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
+
+    const onConnect = () => {
+      conn.write(JSON.stringify({ command, args }) + '\n');
+    };
     // Connect via TCP ({host, port}) or Unix socket/named pipe (string)
     const conn = typeof target === 'object'
-      ? net.createConnection(target.port, target.host, () => {
-          conn.write(JSON.stringify({ command, args }) + '\n');
-        })
-      : net.createConnection(target, () => {
-          conn.write(JSON.stringify({ command, args }) + '\n');
-        });
+      ? net.createConnection(target.port, target.host, onConnect)
+      : net.createConnection(target, onConnect);
+
     let data = '';
     conn.on('data', (chunk) => {
       data += chunk.toString();
       const idx = data.indexOf('\n');
       if (idx >= 0) {
         try {
-          resolve(JSON.parse(data.slice(0, idx)));
+          settle(resolve, JSON.parse(data.slice(0, idx)));
         } catch (e) {
-          reject(new Error('Invalid response'));
+          settle(reject, new Error('Invalid response from coordinator'));
         }
         conn.end();
       }
     });
     conn.on('error', (e) => {
       if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') {
-        reject(new Error('Coordinator not running. Start with: mac10 start'));
+        settle(reject, new Error('Coordinator not running. Start with: mac10 start'));
       } else {
-        reject(e);
+        settle(reject, e);
       }
+    });
+    conn.on('close', () => {
+      // Connection closed without a complete response
+      settle(reject, new Error('Connection closed before receiving a complete response'));
     });
     // Timeout for blocking commands
     const timeout = command === 'inbox-block' ? 600000 : 30000;
     conn.setTimeout(timeout, () => {
       conn.end();
-      resolve({ ok: true, messages: [] }); // timeout returns empty for blocking inbox
+      settle(resolve, { ok: true, messages: [] }); // timeout returns empty for blocking inbox
     });
   });
 }
 
 function findConnectionTargetForProject(projectDir) {
   const stateDir = path.join(projectDir, '.claude', 'state');
+
+  // Priority matches findConnectionTarget: sock.path > sock > TCP > pipe
+  const sockPathFile = path.join(stateDir, 'mac10.sock.path');
+  if (fs.existsSync(sockPathFile)) {
+    const sockPath = fs.readFileSync(sockPathFile, 'utf8').trim();
+    try { if (fs.statSync(sockPath).isSocket()) return sockPath; } catch {}
+  }
+
+  const sock = path.join(stateDir, 'mac10.sock');
+  try { if (fs.existsSync(sock) && fs.statSync(sock).isSocket()) return sock; } catch {}
+
+  const tcpFile = path.join(stateDir, 'mac10.tcp.port');
+  if (fs.existsSync(tcpFile)) {
+    const port = parseInt(fs.readFileSync(tcpFile, 'utf8').trim(), 10);
+    if (port > 0) return { host: '127.0.0.1', port };
+  }
+
   const pipeFile = path.join(stateDir, 'mac10.pipe');
   if (fs.existsSync(pipeFile)) {
     return fs.readFileSync(pipeFile, 'utf8').trim();
   }
-  const tcpFile = path.join(stateDir, 'mac10.tcp.port');
-  if (fs.existsSync(tcpFile)) {
-    const port = parseInt(fs.readFileSync(tcpFile, 'utf8').trim());
-    if (port > 0) return { host: '127.0.0.1', port };
-  }
-  const sockPathFile = path.join(stateDir, 'mac10.sock.path');
-  if (fs.existsSync(sockPathFile)) {
-    return fs.readFileSync(sockPathFile, 'utf8').trim();
-  }
-  const sock = path.join(stateDir, 'mac10.sock');
-  if (fs.existsSync(sock)) return sock;
+
   console.error(`Error: mac10 coordinator not running for project: ${projectDir}`);
   process.exit(1);
 }
@@ -157,26 +168,28 @@ async function main() {
   }
 
   if (cmd === 'stop') {
-    const socketPath = findSocketPath();
+    const socketPath = findConnectionTarget();
     // Just remove the socket — coordinator watches for this
     try { fs.unlinkSync(socketPath); } catch {}
     console.log('Coordinator stopped.');
     process.exit(0);
   }
 
-  const socketPath = projectOverride ? findConnectionTargetForProject(projectOverride) : findSocketPath();
+  const socketPath = projectOverride ? findConnectionTargetForProject(projectOverride) : findConnectionTarget();
 
   try {
     let result;
     switch (cmd) {
       // USER
       case 'request':
+        if (argv.length < 2) { console.error('Usage: mac10 request <description>'); process.exit(1); }
         result = await send(socketPath, 'request', { description: argv.slice(1).join(' ') });
         if (result.ok) console.log(`Request created: ${result.request_id}`);
         else console.error(result.error);
         break;
 
       case 'fix':
+        if (argv.length < 2) { console.error('Usage: mac10 fix <description>'); process.exit(1); }
         result = await send(socketPath, 'fix', { description: argv.slice(1).join(' ') });
         if (result.ok) console.log(`Urgent fix created: ${result.request_id} (task ${result.task_id})`);
         else console.error(result.error);
@@ -189,6 +202,7 @@ async function main() {
         break;
 
       case 'clarify':
+        if (argv.length < 3) { console.error('Usage: mac10 clarify <request_id> <message>'); process.exit(1); }
         result = await send(socketPath, 'clarify', {
           request_id: argv[1],
           message: argv.slice(2).join(' '),
@@ -198,7 +212,7 @@ async function main() {
         break;
 
       case 'log':
-        result = await send(socketPath, 'log', { limit: parseInt(argv[1]) || 50, actor: argv[2] });
+        result = await send(socketPath, 'log', { limit: parseInt(argv[1], 10) || 50, actor: argv[2] });
         if (result.ok) {
           for (const entry of result.logs.reverse()) {
             console.log(`[${entry.created_at}] ${entry.actor}: ${entry.action} ${entry.details || ''}`);
@@ -208,9 +222,10 @@ async function main() {
 
       // ARCHITECT
       case 'triage':
+        if (argv.length < 3) { console.error('Usage: mac10 triage <request_id> <tier> [reasoning]'); process.exit(1); }
         result = await send(socketPath, 'triage', {
           request_id: argv[1],
-          tier: parseInt(argv[2]),
+          tier: parseInt(argv[2], 10),
           reasoning: argv.slice(3).join(' '),
         });
         if (result.ok) console.log('Triage recorded.');
@@ -246,6 +261,7 @@ async function main() {
 
       // WORKER
       case 'my-task':
+        if (!argv[1]) { console.error('Usage: mac10 my-task <worker_id>'); process.exit(1); }
         result = await send(socketPath, 'my-task', { worker_id: argv[1] });
         if (result.ok) {
           if (result.task) {
@@ -257,30 +273,34 @@ async function main() {
         break;
 
       case 'start-task':
+        if (argv.length < 3) { console.error('Usage: mac10 start-task <worker_id> <task_id>'); process.exit(1); }
         result = await send(socketPath, 'start-task', {
           worker_id: argv[1],
-          task_id: parseInt(argv[2]),
+          task_id: parseInt(argv[2], 10),
         });
         if (result.ok) console.log('Task started.');
         else console.error(result.error);
         break;
 
       case 'heartbeat':
+        if (!argv[1]) { console.error('Usage: mac10 heartbeat <worker_id>'); process.exit(1); }
         result = await send(socketPath, 'heartbeat', { worker_id: argv[1] });
         if (result.ok) console.log('ok');
         else console.error(result.error);
         break;
 
       case 'reset-worker':
+        if (!argv[1]) { console.error('Usage: mac10 reset-worker <worker_id>'); process.exit(1); }
         result = await send(socketPath, 'reset-worker', { worker_id: argv[1] });
         if (result.ok) console.log('ok');
         else console.error(result.error);
         break;
 
       case 'complete-task':
+        if (argv.length < 3) { console.error('Usage: mac10 complete-task <worker_id> <task_id> [pr_url] [branch] [result]'); process.exit(1); }
         result = await send(socketPath, 'complete-task', {
           worker_id: argv[1],
-          task_id: parseInt(argv[2]),
+          task_id: parseInt(argv[2], 10),
           pr_url: argv[3] || '',
           branch: argv[4] || '',
           result: argv.slice(5).join(' ') || '',
@@ -290,9 +310,10 @@ async function main() {
         break;
 
       case 'fail-task':
+        if (argv.length < 4) { console.error('Usage: mac10 fail-task <worker_id> <task_id> <error>'); process.exit(1); }
         result = await send(socketPath, 'fail-task', {
           worker_id: argv[1],
-          task_id: parseInt(argv[2]),
+          task_id: parseInt(argv[2], 10),
           error: argv.slice(3).join(' '),
         });
         if (result.ok) console.log('Task failure recorded.');
@@ -300,8 +321,9 @@ async function main() {
         break;
 
       case 'distill':
+        if (argv.length < 4) { console.error('Usage: mac10 distill <worker_id> <domain> <content>'); process.exit(1); }
         result = await send(socketPath, 'distill', {
-          worker_id: parseInt(argv[1]),
+          worker_id: argv[1],
           domain: argv[2],
           content: argv.slice(3).join(' '),
         });
@@ -310,10 +332,11 @@ async function main() {
         break;
 
       case 'inbox': {
+        if (!argv[1]) { console.error('Usage: mac10 inbox <recipient> [--block] [--peek]'); process.exit(1); }
         const recipient = argv[1];
         const block = argv.includes('--block');
         const peek = argv.includes('--peek');
-        const timeout = parseInt(argv.find(a => a.startsWith('--timeout='))?.split('=')[1]) || 300000;
+        const timeout = parseInt(argv.find(a => a.startsWith('--timeout='))?.split('=')[1], 10) || 300000;
         if (block) {
           result = await send(socketPath, 'inbox-block', { recipient, timeout });
         } else {
@@ -346,17 +369,19 @@ async function main() {
         break;
 
       case 'assign-task':
+        if (argv.length < 3) { console.error('Usage: mac10 assign-task <task_id> <worker_id>'); process.exit(1); }
         result = await send(socketPath, 'assign-task', {
-          task_id: parseInt(argv[1]),
-          worker_id: parseInt(argv[2]),
+          task_id: parseInt(argv[1], 10),
+          worker_id: parseInt(argv[2], 10),
         });
         if (result.ok) console.log(`Task ${result.task_id} assigned to worker-${result.worker_id}.`);
         else console.error(result.error);
         break;
 
       case 'claim-worker':
+        if (!argv[1]) { console.error('Usage: mac10 claim-worker <worker_id> [claimer]'); process.exit(1); }
         result = await send(socketPath, 'claim-worker', {
-          worker_id: parseInt(argv[1]),
+          worker_id: parseInt(argv[1], 10),
           claimer: argv[2] || 'architect',
         });
         if (result.ok) {
@@ -366,8 +391,9 @@ async function main() {
         break;
 
       case 'release-worker':
+        if (!argv[1]) { console.error('Usage: mac10 release-worker <worker_id>'); process.exit(1); }
         result = await send(socketPath, 'release-worker', {
-          worker_id: parseInt(argv[1]),
+          worker_id: parseInt(argv[1], 10),
         });
         if (result.ok) console.log(`Worker ${argv[1]} released.`);
         else console.error(result.error);
@@ -390,6 +416,7 @@ async function main() {
         break;
 
       case 'check-completion':
+        if (!argv[1]) { console.error('Usage: mac10 check-completion <request_id>'); process.exit(1); }
         result = await send(socketPath, 'check-completion', {
           request_id: argv[1],
         });
@@ -558,6 +585,7 @@ WORKER:
   my-task <worker_id>            Get current assigned task
   start-task <worker_id> <task_id>
   heartbeat <worker_id>
+  reset-worker <worker_id>       Reset worker to idle state
   complete-task <worker_id> <task_id> [pr_url] [branch] [result]
   fail-task <worker_id> <task_id> <error>
   distill <worker_id> <domain> <content>
