@@ -45,6 +45,13 @@ const COMMAND_SCHEMAS = {
   'merge-status':      { required: [], types: { request_id: 'string' } },
   'reset-worker':      { required: ['worker_id'], types: { worker_id: 'string' } },
   'check-overlaps':    { required: ['request_id'], types: { request_id: 'string' } },
+  'log-change':        {
+    required: ['description'],
+    types: { description: 'string', domain: 'string', file_path: 'string', function_name: 'string', tooltip: 'string', status: 'string' },
+    allowed: ['description', 'domain', 'file_path', 'function_name', 'tooltip', 'status'],
+  },
+  'list-changes':      { required: [], types: { domain: 'string', status: 'string' } },
+  'update-change':     { required: ['id'], types: { id: 'number' } },
 };
 
 function validateCommand(cmd) {
@@ -691,6 +698,35 @@ function handleCommand(cmd, conn, handlers) {
         sql += ' ORDER BY id DESC';
         const merges = db.getDb().prepare(sql).all(...params);
         respond(conn, { ok: true, merges });
+        break;
+      }
+
+      // === CHANGES commands ===
+      case 'log-change': {
+        const changeId = db.createChange(args);
+        const change = db.getChange(changeId);
+        db.log('coordinator', 'change_logged', { change_id: changeId, description: args.description });
+        if (handlers.onChangeCreated) handlers.onChangeCreated(change);
+        respond(conn, { ok: true, change_id: changeId });
+        break;
+      }
+      case 'list-changes': {
+        const changes = db.listChanges(args || {});
+        respond(conn, { ok: true, changes });
+        break;
+      }
+      case 'update-change': {
+        const { id: changeId2, ...changeFields } = args;
+        // Only allow valid change columns
+        const allowed = ['enabled', 'status', 'description', 'tooltip'];
+        const filtered = {};
+        for (const k of allowed) {
+          if (changeFields[k] !== undefined) filtered[k] = changeFields[k];
+        }
+        db.updateChange(changeId2, filtered);
+        const updated = db.getChange(changeId2);
+        if (handlers.onChangeUpdated) handlers.onChangeUpdated(updated);
+        respond(conn, { ok: true });
         break;
       }
 

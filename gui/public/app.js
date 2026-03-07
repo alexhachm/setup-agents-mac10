@@ -28,6 +28,8 @@
       presets: [],
       setupRunning: false,
       gitPushing: false,
+      changes: [],
+      changesDomainFilter: '',
     };
   }
 
@@ -76,6 +78,14 @@
         } else if (msg.type === 'setup_complete') {
           tab.setupRunning = false;
           if (tab.id === activeTabId) onSetupComplete(msg.code);
+        } else if (msg.type === 'change_created') {
+          tab.changes.unshift(msg.change);
+          if (tab.id === activeTabId) renderChanges(tab);
+        } else if (msg.type === 'change_updated') {
+          const idx = tab.changes.findIndex(c => c.id === msg.change.id);
+          if (idx >= 0) tab.changes[idx] = msg.change;
+          else tab.changes.unshift(msg.change);
+          if (tab.id === activeTabId) renderChanges(tab);
         } else if (msg.type === 'git_push_log') {
           if (tab.id === activeTabId) appendGitLog(msg.line);
         } else if (msg.type === 'git_push_complete') {
@@ -126,6 +136,7 @@
     fetchTabConfig(tab);
     fetchTabPresets(tab);
     fetchTabStatus(tab);
+    fetchTabChanges(tab);
   }
 
   function addTab(port, name, projectDir) {
@@ -829,6 +840,90 @@
       errEl.textContent = 'Error: ' + err.message;
       errEl.style.display = '';
     });
+  });
+
+  // --- Changes ---
+
+  function fetchTabChanges(tab) {
+    const params = tab.changesDomainFilter ? '?domain=' + encodeURIComponent(tab.changesDomainFilter) : '';
+    tabFetch(tab, '/api/changes' + params)
+      .then(r => r.json())
+      .then(data => {
+        tab.changes = Array.isArray(data) ? data : [];
+        if (tab.id === activeTabId) renderChanges(tab);
+      })
+      .catch(err => console.error('Changes fetch failed:', err));
+  }
+
+  function renderChanges(tab) {
+    const el = document.getElementById('changes-list');
+    const domainSelect = document.getElementById('changes-domain-select');
+
+    // Update domain filter options from available domains
+    const domains = new Set();
+    for (const c of tab.changes) {
+      if (c.domain) domains.add(c.domain);
+    }
+    const currentFilter = domainSelect.value;
+    domainSelect.innerHTML = '<option value="">All Domains</option>';
+    for (const d of [...domains].sort()) {
+      const opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = d;
+      domainSelect.appendChild(opt);
+    }
+    domainSelect.value = currentFilter;
+
+    // Filter by domain
+    const filtered = tab.changesDomainFilter
+      ? tab.changes.filter(c => c.domain === tab.changesDomainFilter)
+      : tab.changes;
+
+    if (filtered.length === 0) {
+      el.innerHTML = '<div style="color:#8b949e;font-size:13px">No changes logged</div>';
+      return;
+    }
+
+    el.innerHTML = filtered.map(c => {
+      const isPending = c.status === 'pending_user_action';
+      const tooltipEl = c.tooltip ? `<div class="change-tooltip">${escapeHtml(c.tooltip)}</div>` : '';
+      return `
+        <div class="change-item${isPending ? ' pending-action' : ''}" data-change-id="${c.id}">
+          <input type="checkbox" class="change-toggle" ${c.enabled ? 'checked' : ''} data-id="${c.id}" />
+          <div class="change-content">
+            <div class="change-desc">${escapeHtml(c.description)}</div>
+            <div class="change-meta">
+              ${c.domain ? `<span class="change-domain-badge">${escapeHtml(c.domain)}</span>` : ''}
+              ${isPending ? '<span class="change-action-badge">Action Required</span>' : ''}
+              ${c.file_path ? `<span>${escapeHtml(c.file_path)}</span>` : ''}
+              ${c.function_name ? `<span>${escapeHtml(c.function_name)}</span>` : ''}
+            </div>
+          </div>
+          ${tooltipEl}
+        </div>`;
+    }).join('');
+
+    // Bind toggle events
+    el.querySelectorAll('.change-toggle').forEach(cb => {
+      cb.addEventListener('change', function() {
+        const id = parseInt(this.dataset.id);
+        const enabled = this.checked ? 1 : 0;
+        const tab = activeTab();
+        if (!tab) return;
+        tabFetch(tab, '/api/changes/' + id, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        }).catch(err => console.error('Change toggle failed:', err));
+      });
+    });
+  }
+
+  document.getElementById('changes-domain-select').addEventListener('change', function() {
+    const tab = activeTab();
+    if (!tab) return;
+    tab.changesDomainFilter = this.value;
+    renderChanges(tab);
   });
 
   // --- Initial load ---

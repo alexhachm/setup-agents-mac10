@@ -476,6 +476,47 @@ async function main() {
         } else console.error(result.error);
         break;
 
+      case 'log-change': {
+        // mac10 log-change <description> [--domain X] [--file Y] [--fn Z] [--tooltip T] [--status S]
+        const changeArgs = { description: '' };
+        const descParts = [];
+        for (let i = 1; i < argv.length; i++) {
+          if (argv[i] === '--domain' && argv[i + 1]) { changeArgs.domain = argv[++i]; }
+          else if (argv[i] === '--file' && argv[i + 1]) { changeArgs.file_path = argv[++i]; }
+          else if (argv[i] === '--fn' && argv[i + 1]) { changeArgs.function_name = argv[++i]; }
+          else if (argv[i] === '--tooltip' && argv[i + 1]) { changeArgs.tooltip = argv[++i]; }
+          else if (argv[i] === '--status' && argv[i + 1]) { changeArgs.status = argv[++i]; }
+          else { descParts.push(argv[i]); }
+        }
+        changeArgs.description = descParts.join(' ');
+        if (!changeArgs.description) {
+          console.error('Usage: mac10 log-change <description> [--domain X] [--file Y] [--fn Z] [--tooltip T]');
+          process.exit(1);
+        }
+        result = await send(socketPath, 'log-change', changeArgs);
+        if (result.ok) console.log(`Change logged: #${result.change_id}`);
+        else console.error(result.error);
+        break;
+      }
+
+      case 'list-changes': {
+        const listArgs = {};
+        if (argv[1]) listArgs.domain = argv[1];
+        result = await send(socketPath, 'list-changes', listArgs);
+        if (result.ok) {
+          if (result.changes.length === 0) {
+            console.log('No changes logged.');
+          } else {
+            for (const c of result.changes) {
+              const toggle = c.enabled ? 'ON' : 'OFF';
+              const stat = c.status === 'pending_user_action' ? ' [ACTION]' : '';
+              console.log(`  #${c.id} [${toggle}]${stat} ${c.description} ${c.domain ? `[${c.domain}]` : ''}`);
+            }
+          }
+        } else console.error(result.error);
+        break;
+      }
+
       default:
         console.error(`Unknown command: ${cmd}`);
         printUsage();
@@ -520,6 +561,10 @@ WORKER:
   complete-task <worker_id> <task_id> [pr_url] [branch] [result]
   fail-task <worker_id> <task_id> <error>
   distill <worker_id> <domain> <content>
+
+CHANGES:
+  log-change <desc> [--domain X] [--file Y] [--fn Z] [--tooltip T]
+  list-changes [domain]          List all changes (optionally filter by domain)
 
 SYSTEM:
   start [project_dir]            Start coordinator
