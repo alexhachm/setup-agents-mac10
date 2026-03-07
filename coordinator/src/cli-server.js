@@ -55,6 +55,7 @@ const COMMAND_SCHEMAS = {
   'list-changes':      { required: [], types: { domain: 'string', status: 'string' } },
   'update-change':     { required: ['id'], types: { id: 'number' } },
   'integrate':         { required: ['request_id'], types: { request_id: 'string' } },
+  'reset-merges':      { required: [], types: { request_id: 'string' } },
 };
 
 /** Parse a files field into an array. Handles arrays, JSON strings, and comma-separated strings. */
@@ -592,8 +593,10 @@ function handleCommand(cmd, conn, handlers) {
         const cutoff = new Date(Date.now() - 3 * 60 * 1000).toISOString();
         const stuck = db.getDb().prepare("UPDATE workers SET status = 'idle', current_task_id = NULL WHERE status IN ('assigned','running','busy') AND last_heartbeat < ?").run(cutoff);
         const orphaned = db.getDb().prepare("UPDATE tasks SET status = 'ready', assigned_to = NULL WHERE status IN ('assigned','in_progress') AND assigned_to IN (SELECT id FROM workers WHERE status = 'idle')").run();
-        db.log('coordinator', 'repair', { reset_workers: stuck.changes, orphaned_tasks: orphaned.changes });
-        respond(conn, { ok: true, reset_workers: stuck.changes, orphaned_tasks: orphaned.changes });
+        // Reset conflict merge entries so merger can retry them
+        const conflictMerges = db.getDb().prepare("UPDATE merge_queue SET status = 'pending', error = NULL WHERE status = 'conflict'").run();
+        db.log('coordinator', 'repair', { reset_workers: stuck.changes, orphaned_tasks: orphaned.changes, conflict_merges_reset: conflictMerges.changes });
+        respond(conn, { ok: true, reset_workers: stuck.changes, orphaned_tasks: orphaned.changes, conflict_merges_reset: conflictMerges.changes });
         break;
       }
       case 'ping': {
@@ -716,6 +719,20 @@ function handleCommand(cmd, conn, handlers) {
         sql += ' ORDER BY id DESC';
         const merges = db.getDb().prepare(sql).all(...params);
         respond(conn, { ok: true, merges });
+        break;
+      }
+
+      case 'reset-merges': {
+        const filterReqId = args && args.request_id;
+        let sql = "UPDATE merge_queue SET status = 'pending', error = NULL WHERE status = 'conflict'";
+        const params = [];
+        if (filterReqId) {
+          sql += ' AND request_id = ?';
+          params.push(filterReqId);
+        }
+        const resetResult = db.getDb().prepare(sql).run(...params);
+        db.log('coordinator', 'reset_merges', { request_id: filterReqId || 'all', reset_count: resetResult.changes });
+        respond(conn, { ok: true, reset_count: resetResult.changes });
         break;
       }
 
