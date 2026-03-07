@@ -38,6 +38,7 @@ function init(projectDir) {
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
   db.pragma('foreign_keys = ON');
+  db.pragma('wal_autocheckpoint = 1000');
 
   // Run migrations BEFORE schema (schema creates indexes on columns that
   // may not exist in older databases; migrations must add them first).
@@ -77,12 +78,15 @@ function getDb() {
 
 function createRequest(description) {
   const id = 'req-' + crypto.randomBytes(4).toString('hex');
-  getDb().prepare(`
-    INSERT INTO requests (id, description) VALUES (?, ?)
-  `).run(id, description);
-  sendMail('architect', 'new_request', { request_id: id, description });
-  sendMail('master-1', 'request_acknowledged', { request_id: id, description });
-  log('user', 'request_created', { request_id: id, description });
+  const txn = getDb().transaction(() => {
+    getDb().prepare(`
+      INSERT INTO requests (id, description) VALUES (?, ?)
+    `).run(id, description);
+    sendMail('architect', 'new_request', { request_id: id, description });
+    sendMail('master-1', 'request_acknowledged', { request_id: id, description });
+    log('user', 'request_created', { request_id: id, description });
+  });
+  txn();
   return id;
 }
 
@@ -164,13 +168,18 @@ function getReadyTasks() {
 }
 
 function checkAndPromoteTasks() {
-  // Promote 'pending' tasks whose dependencies are all completed
-  const pending = getDb().prepare("SELECT * FROM tasks WHERE status = 'pending'").all();
+  const d = getDb();
+  // Batch promote pending tasks with no dependencies in a single SQL statement
+  d.prepare(`
+    UPDATE tasks SET status = 'ready', updated_at = datetime('now')
+    WHERE status = 'pending' AND (depends_on IS NULL OR depends_on = '[]')
+  `).run();
+
+  // For tasks with dependencies, check each one
+  const pending = d.prepare(
+    "SELECT id, depends_on FROM tasks WHERE status = 'pending' AND depends_on IS NOT NULL AND depends_on != '[]'"
+  ).all();
   for (const task of pending) {
-    if (!task.depends_on) {
-      updateTask(task.id, { status: 'ready' });
-      continue;
-    }
     let deps;
     try {
       deps = JSON.parse(task.depends_on);
@@ -178,7 +187,11 @@ function checkAndPromoteTasks() {
       updateTask(task.id, { status: 'failed', result: `Invalid depends_on JSON: ${e.message}` });
       continue;
     }
-    const unfinished = getDb().prepare(
+    if (!deps.length) {
+      updateTask(task.id, { status: 'ready' });
+      continue;
+    }
+    const unfinished = d.prepare(
       `SELECT COUNT(*) as cnt FROM tasks WHERE id IN (${deps.map(() => '?').join(',')}) AND status != 'completed'`
     ).get(...deps);
     if (unfinished.cnt === 0) {
@@ -232,21 +245,19 @@ function releaseWorker(workerId) {
 }
 
 function checkRequestCompletion(requestId) {
-  const total = getDb().prepare(
-    'SELECT COUNT(*) as cnt FROM tasks WHERE request_id = ?'
-  ).get(requestId);
-  const done = getDb().prepare(
-    "SELECT COUNT(*) as cnt FROM tasks WHERE request_id = ? AND status = 'completed'"
-  ).get(requestId);
-  const failed = getDb().prepare(
-    "SELECT COUNT(*) as cnt FROM tasks WHERE request_id = ? AND status = 'failed'"
-  ).get(requestId);
+  const row = getDb().prepare(`
+    SELECT
+      COUNT(*) as total,
+      COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as completed,
+      COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed
+    FROM tasks WHERE request_id = ?
+  `).get(requestId);
   return {
     request_id: requestId,
-    total: total.cnt,
-    completed: done.cnt,
-    failed: failed.cnt,
-    all_done: done.cnt + failed.cnt >= total.cnt && total.cnt > 0,
+    total: row.total,
+    completed: row.completed,
+    failed: row.failed,
+    all_done: row.completed + row.failed >= row.total && row.total > 0,
   };
 }
 
@@ -259,14 +270,27 @@ function sendMail(recipient, type, payload = {}) {
 }
 
 function checkMail(recipient, consume = true) {
-  const messages = getDb().prepare(`
-    SELECT * FROM mail WHERE recipient = ? AND consumed = 0 ORDER BY id
-  `).all(recipient);
-  if (consume && messages.length > 0) {
-    const ids = messages.map(m => m.id);
-    getDb().prepare(
-      `UPDATE mail SET consumed = 1 WHERE id IN (${ids.map(() => '?').join(',')})`
-    ).run(...ids);
+  const d = getDb();
+  let messages;
+  if (consume) {
+    // Atomic read-and-consume: transaction prevents two consumers reading the same messages
+    const txn = d.transaction(() => {
+      const msgs = d.prepare(`
+        SELECT * FROM mail WHERE recipient = ? AND consumed = 0 ORDER BY id
+      `).all(recipient);
+      if (msgs.length > 0) {
+        const ids = msgs.map(m => m.id);
+        d.prepare(
+          `UPDATE mail SET consumed = 1 WHERE id IN (${ids.map(() => '?').join(',')})`
+        ).run(...ids);
+      }
+      return msgs;
+    });
+    messages = txn();
+  } else {
+    messages = d.prepare(`
+      SELECT * FROM mail WHERE recipient = ? AND consumed = 0 ORDER BY id
+    `).all(recipient);
   }
   return messages.map(m => {
     try {
@@ -301,16 +325,12 @@ function checkMailBlocking(recipient, timeoutMs = 300000, pollMs = 1000) {
 // --- Merge queue helpers ---
 
 function enqueueMerge({ request_id, task_id, pr_url, branch, priority }) {
-  // Skip if any entry already exists for this PR URL (prevents infinite merge-conflict loop)
-  const existing = getDb().prepare(`
-    SELECT id FROM merge_queue WHERE pr_url = ?
-  `).get(pr_url);
-  if (existing) return;
-
+  // Atomic dedup+insert: prevents TOCTOU race between SELECT and INSERT
   getDb().prepare(`
     INSERT INTO merge_queue (request_id, task_id, pr_url, branch, priority)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(request_id, task_id, pr_url, branch, priority || 0);
+    SELECT ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (SELECT 1 FROM merge_queue WHERE pr_url = ?)
+  `).run(request_id, task_id, pr_url, branch, priority || 0, pr_url);
 }
 
 function getNextMerge() {
