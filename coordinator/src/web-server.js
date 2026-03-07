@@ -593,6 +593,58 @@ function start(projectDir, port = 3100, scriptDir = null) {
     }
   });
 
+  // --- Changes endpoints ---
+
+  app.get('/api/changes', (req, res) => {
+    try {
+      const filters = {};
+      if (req.query.domain) filters.domain = req.query.domain;
+      if (req.query.status) filters.status = req.query.status;
+      res.json(db.listChanges(filters));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/changes', (req, res) => {
+    try {
+      const { description, domain, file_path, function_name, tooltip, status } = req.body;
+      if (!description) {
+        return res.status(400).json({ ok: false, error: 'description is required' });
+      }
+      const id = db.createChange({ description, domain, file_path, function_name, tooltip, status });
+      const change = db.getChange(id);
+      db.log('gui', 'change_created', { change_id: id, description });
+      broadcast({ type: 'change_created', change });
+      res.json({ ok: true, change_id: id, change });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.patch('/api/changes/:id', (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!id) return res.status(400).json({ ok: false, error: 'Invalid change id' });
+      const existing = db.getChange(id);
+      if (!existing) return res.status(404).json({ ok: false, error: 'Change not found' });
+      const allowed = ['enabled', 'status', 'description', 'tooltip'];
+      const fields = {};
+      for (const k of allowed) {
+        if (req.body[k] !== undefined) fields[k] = req.body[k];
+      }
+      if (Object.keys(fields).length === 0) {
+        return res.status(400).json({ ok: false, error: 'No valid fields to update' });
+      }
+      db.updateChange(id, fields);
+      const updated = db.getChange(id);
+      broadcast({ type: 'change_updated', change: updated });
+      res.json({ ok: true, change: updated });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   // WebSocket for live updates
   wss.on('connection', (ws) => {
     // Send initial state

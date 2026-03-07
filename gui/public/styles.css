@@ -686,6 +686,129 @@ h2 {
   margin-top: 8px;
 }
 
+/* Changes panel */
+#changes-panel { margin-bottom: 24px; }
+
+#changes-domain-filter {
+  margin-left: auto;
+}
+
+#changes-domain-select {
+  padding: 4px 10px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  font-size: 12px;
+}
+
+#changes-domain-select:focus { border-color: #58a6ff; outline: none; }
+
+.change-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  position: relative;
+}
+
+.change-item.pending-action {
+  border-color: #d29922;
+  background: #d299220a;
+}
+
+.change-toggle {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  background: #0d1117;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 2px;
+  position: relative;
+}
+
+.change-toggle:checked {
+  background: #238636;
+  border-color: #238636;
+}
+
+.change-toggle:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.change-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.change-desc {
+  color: #c9d1d9;
+  font-weight: 500;
+}
+
+.change-meta {
+  font-size: 11px;
+  color: #8b949e;
+  margin-top: 3px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.change-domain-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #1c2d3f;
+  color: #58a6ff;
+}
+
+.change-action-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #3d2b1f;
+  color: #d29922;
+}
+
+.change-tooltip {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 10px;
+  z-index: 100;
+  background: #1c2128;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #c9d1d9;
+  max-width: 400px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  white-space: pre-wrap;
+  margin-top: 4px;
+}
+
+.change-item:hover .change-tooltip {
+  display: block;
+}
+
 @media (max-width: 900px) {
   .grid { grid-template-columns: 1fr; }
   .masters-grid { grid-template-columns: 1fr; }

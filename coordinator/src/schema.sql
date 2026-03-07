@@ -113,6 +113,20 @@ CREATE TABLE IF NOT EXISTS presets (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Changes tracking (toggleable changelog items)
+CREATE TABLE IF NOT EXISTS changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  description TEXT NOT NULL,
+  domain TEXT,            -- coordinator, gui, cli, infra, etc.
+  file_path TEXT,         -- file that was modified
+  function_name TEXT,     -- function that was improved
+  tooltip TEXT,           -- detailed explanation of the change
+  enabled INTEGER NOT NULL DEFAULT 1,  -- toggle on/off (1=on, 0=off)
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active','pending_user_action')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_request ON tasks(request_id);
@@ -128,6 +142,8 @@ CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_workers_status ON workers(status);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_overlap ON tasks(overlap_with) WHERE overlap_with IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_changes_domain ON changes(domain);
+CREATE INDEX IF NOT EXISTS idx_changes_status ON changes(status);
 
 -- Default config
 INSERT OR IGNORE INTO config (key, value) VALUES

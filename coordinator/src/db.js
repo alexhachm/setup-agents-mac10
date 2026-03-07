@@ -12,6 +12,7 @@ const VALID_COLUMNS = Object.freeze({
   tasks: new Set(['request_id', 'subject', 'description', 'domain', 'files', 'priority', 'tier', 'depends_on', 'assigned_to', 'status', 'pr_url', 'branch', 'validation', 'overlap_with', 'started_at', 'completed_at', 'result']),
   workers: new Set(['status', 'domain', 'worktree_path', 'branch', 'tmux_session', 'tmux_window', 'pid', 'current_task_id', 'claimed_by', 'last_heartbeat', 'launched_at', 'tasks_completed']),
   merge_queue: new Set(['status', 'priority', 'merged_at', 'error']),
+  changes: new Set(['description', 'domain', 'file_path', 'function_name', 'tooltip', 'enabled', 'status']),
 });
 
 function validateColumns(table, fields) {
@@ -468,6 +469,48 @@ function hasOverlappingMergedTasks(taskId) {
   return merged;
 }
 
+// --- Change tracking helpers ---
+
+function createChange({ description, domain, file_path, function_name, tooltip, status }) {
+  const result = getDb().prepare(`
+    INSERT INTO changes (description, domain, file_path, function_name, tooltip, status)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    description,
+    domain || null,
+    file_path || null,
+    function_name || null,
+    tooltip || null,
+    status || 'active'
+  );
+  return result.lastInsertRowid;
+}
+
+function getChange(id) {
+  return getDb().prepare('SELECT * FROM changes WHERE id = ?').get(id);
+}
+
+function listChanges(filters = {}) {
+  let sql = 'SELECT * FROM changes WHERE 1=1';
+  const vals = [];
+  if (filters.domain) { sql += ' AND domain = ?'; vals.push(filters.domain); }
+  if (filters.status) { sql += ' AND status = ?'; vals.push(filters.status); }
+  sql += ' ORDER BY id DESC';
+  return getDb().prepare(sql).all(...vals);
+}
+
+function updateChange(id, fields) {
+  validateColumns('changes', fields);
+  const sets = [];
+  const vals = [];
+  for (const [k, v] of Object.entries(fields)) {
+    sets.push(`${k} = ?`);
+    vals.push(v);
+  }
+  vals.push(id);
+  getDb().prepare(`UPDATE changes SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+}
+
 module.exports = {
   init, close, getDb,
   createRequest, getRequest, updateRequest, listRequests,
@@ -479,4 +522,5 @@ module.exports = {
   getConfig, setConfig,
   savePreset, listPresets, getPreset, deletePreset,
   findOverlappingTasks, getOverlapsForRequest, hasOverlappingMergedTasks,
+  createChange, getChange, listChanges, updateChange,
 };
