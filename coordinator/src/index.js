@@ -32,6 +32,20 @@ if (tmux.isAvailable()) {
 // Start CLI server (Unix socket for mac10 commands)
 const handlers = {
   onTaskCompleted: (taskId) => merger.onTaskCompleted(taskId),
+  onShutdown: () => {
+    // Forward-reference: shutdown() is defined inside the async IIFE below.
+    // Before it's available, fall back to a hard exit.
+    if (typeof handlers._shutdown === 'function') handlers._shutdown();
+    else process.exit(0);
+  },
+  onLoopCreated: (loop) => {
+    const sentinelPath = path.join(scriptDir, 'scripts', 'loop-sentinel.sh');
+    const windowName = `loop-${loop.id}`;
+    if (tmux.isAvailable()) {
+      tmux.createWindow(windowName, `bash "${sentinelPath}" "${loop.id}" "${projectDir}"`, projectDir);
+      db.log('coordinator', 'loop_sentinel_spawned', { loop_id: loop.id, window: windowName });
+    }
+  },
   onAssignTask: (task, worker) => {
     const worktreePath = worker.worktree_path || path.join(projectDir, '.worktrees', `wt-${worker.id}`);
 
@@ -109,7 +123,10 @@ console.log('Merger running.');
 // dashboard at /api/instances can manage them all from one place.
 (async () => {
   const port = parseInt(process.env.MAC10_PORT) || await instanceRegistry.acquirePort(3100);
-  webServer.start(projectDir, port, scriptDir);
+  // shutdown is defined below — forward-referenced via closure
+  webServer.start(projectDir, port, scriptDir, {
+    onShutdown: () => shutdown(),
+  });
   console.log(`Web dashboard: http://localhost:${port}`);
 
   instanceRegistry.register({
@@ -122,7 +139,7 @@ console.log('Merger running.');
   });
   console.log('Instance registered in shared registry.');
 
-  // Re-wire shutdown to know the port
+  // Re-wire shutdown to know the port — also expose via handlers for CLI server
   function shutdown() {
     console.log('Shutting down...');
     instanceRegistry.deregister(port);
@@ -135,6 +152,7 @@ console.log('Merger running.');
     db.close();
     process.exit(0);
   }
+  handlers._shutdown = shutdown;
   process.removeAllListeners('SIGINT');
   process.removeAllListeners('SIGTERM');
   process.on('SIGINT', shutdown);
@@ -142,6 +160,20 @@ console.log('Merger running.');
 
   db.log('coordinator', 'started', { project_dir: projectDir, port });
   console.log('mac10 coordinator ready.');
+
+  // Auto-launch Master-1 (Interface) so the user always has an interactive agent
+  if (tmux.isAvailable()) {
+    const masterWindowName = 'master-1';
+    if (!tmux.hasWindow(masterWindowName)) {
+      const launchAgentPath = path.join(scriptDir, 'scripts', 'launch-agent.sh');
+      const fs = require('fs');
+      if (fs.existsSync(launchAgentPath)) {
+        tmux.createWindow(masterWindowName, `bash "${launchAgentPath}" "${projectDir}" sonnet /master-loop`, projectDir);
+        db.log('coordinator', 'master1_launched', { window: masterWindowName });
+        console.log('Master-1 (Interface) launched.');
+      }
+    }
+  }
 })();
 
 // Crash handlers — log and exit cleanly instead of dying silently

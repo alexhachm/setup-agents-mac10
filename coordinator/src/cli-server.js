@@ -57,6 +57,15 @@ const COMMAND_SCHEMAS = {
   'integrate':         { required: ['request_id'], types: { request_id: 'string' } },
   'reset-merges':      { required: [], types: { request_id: 'string' } },
   'history':           { required: ['request_id'], types: { request_id: 'string' } },
+  'shutdown':          { required: [], types: {} },
+  'loop':              { required: ['prompt'], types: { prompt: 'string' } },
+  'stop-loop':         { required: ['loop_id'], types: {} },
+  'loop-status':       { required: [], types: {} },
+  'loop-prompt':       { required: ['loop_id'], types: {} },
+  'loop-requests':     { required: ['loop_id'], types: {} },
+  'loop-request':      { required: ['loop_id', 'description'], types: { description: 'string' } },
+  'loop-heartbeat':    { required: ['loop_id'], types: {} },
+  'loop-checkpoint':   { required: ['loop_id', 'checkpoint'], types: { checkpoint: 'string' } },
 };
 
 /** Parse a files field into an array. Handles arrays, JSON strings, and comma-separated strings. */
@@ -773,19 +782,103 @@ function handleCommand(cmd, conn, handlers) {
       // === HISTORY command ===
       case 'history': {
         const reqId = args.request_id;
-        const req = db.getRequest(reqId);
-        if (!req) {
+        const history = db.getRequestHistory(reqId);
+        if (!history) {
           respond(conn, { ok: false, error: `Request ${reqId} not found` });
           break;
         }
-        const tasks = db.listTasks({ request_id: reqId });
-        const logs = db.getDb().prepare(
-          "SELECT * FROM activity_log WHERE details LIKE ? ORDER BY id ASC"
-        ).all(`%${reqId}%`);
-        const merges = db.getDb().prepare(
-          "SELECT * FROM merge_queue WHERE request_id = ? ORDER BY id ASC"
-        ).all(reqId);
-        respond(conn, { ok: true, request: req, tasks, logs, merges });
+        respond(conn, { ok: true, ...history });
+        break;
+      }
+
+      case 'shutdown': {
+        respond(conn, { ok: true, message: 'Coordinator shutting down' });
+        db.log('coordinator', 'manual_shutdown', { source: 'cli' });
+        setTimeout(() => {
+          if (handlers.onShutdown) handlers.onShutdown();
+        }, 500);
+        break;
+      }
+
+      // === LOOP commands ===
+      case 'loop': {
+        const loopId = db.createLoop(args.prompt);
+        const loop = db.getLoop(loopId);
+        if (handlers.onLoopCreated) handlers.onLoopCreated(loop);
+        respond(conn, { ok: true, loop_id: loopId });
+        break;
+      }
+      case 'stop-loop': {
+        const loop = db.getLoop(args.loop_id);
+        if (!loop) {
+          respond(conn, { ok: false, error: `Loop ${args.loop_id} not found` });
+          break;
+        }
+        db.updateLoop(args.loop_id, { status: 'stopped', stopped_at: new Date().toISOString() });
+        db.log('user', 'loop_stopped', { loop_id: args.loop_id });
+        respond(conn, { ok: true });
+        break;
+      }
+      case 'loop-status': {
+        const loops = db.listLoops();
+        respond(conn, { ok: true, loops });
+        break;
+      }
+      case 'loop-prompt': {
+        const loop = db.getLoop(args.loop_id);
+        if (!loop) {
+          respond(conn, { ok: false, error: `Loop ${args.loop_id} not found` });
+          break;
+        }
+        respond(conn, {
+          ok: true,
+          status: loop.status,
+          prompt: loop.prompt,
+          last_checkpoint: loop.last_checkpoint || loop.checkpoint || null,
+          iteration_count: loop.iteration_count,
+        });
+        break;
+      }
+      case 'loop-requests': {
+        const requests = db.getLoopRequests(args.loop_id);
+        respond(conn, { ok: true, requests });
+        break;
+      }
+      case 'loop-request': {
+        const loop = db.getLoop(args.loop_id);
+        if (!loop || loop.status !== 'active') {
+          respond(conn, { ok: false, error: `Loop ${args.loop_id} not active` });
+          break;
+        }
+        const reqId = db.createLoopRequest(args.loop_id, args.description);
+        respond(conn, { ok: true, request_id: reqId });
+        break;
+      }
+      case 'loop-heartbeat': {
+        const loop = db.getLoop(args.loop_id);
+        if (!loop) {
+          respond(conn, { ok: false, error: `Loop ${args.loop_id} not found`, exit_code: 2 });
+          break;
+        }
+        db.updateLoop(args.loop_id, { last_heartbeat: new Date().toISOString() });
+        if (loop.status !== 'active') {
+          respond(conn, { ok: false, exit_code: 2 });
+        } else {
+          respond(conn, { ok: true });
+        }
+        break;
+      }
+      case 'loop-checkpoint': {
+        const loop = db.getLoop(args.loop_id);
+        if (!loop) {
+          respond(conn, { ok: false, error: `Loop ${args.loop_id} not found` });
+          break;
+        }
+        db.updateLoop(args.loop_id, {
+          last_checkpoint: args.checkpoint,
+          iteration_count: loop.iteration_count + 1,
+        });
+        respond(conn, { ok: true });
         break;
       }
 

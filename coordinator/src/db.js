@@ -13,6 +13,7 @@ const VALID_COLUMNS = Object.freeze({
   workers: new Set(['status', 'domain', 'worktree_path', 'branch', 'tmux_session', 'tmux_window', 'pid', 'current_task_id', 'claimed_by', 'last_heartbeat', 'launched_at', 'tasks_completed']),
   merge_queue: new Set(['status', 'priority', 'merged_at', 'error']),
   changes: new Set(['description', 'domain', 'file_path', 'function_name', 'tooltip', 'enabled', 'status']),
+  loops: new Set(['status', 'checkpoint', 'last_checkpoint', 'iteration_count', 'last_heartbeat', 'updated_at', 'stopped_at']),
 });
 
 function validateColumns(table, fields) {
@@ -53,6 +54,12 @@ function init(projectDir) {
     const taskCols = db.prepare("PRAGMA table_info(tasks)").all().map(c => c.name);
     if (!taskCols.includes('overlap_with')) {
       db.exec("ALTER TABLE tasks ADD COLUMN overlap_with TEXT");
+    }
+  }
+  if (existingTables.includes('requests')) {
+    const reqCols = db.prepare("PRAGMA table_info(requests)").all().map(c => c.name);
+    if (!reqCols.includes('loop_id')) {
+      db.exec("ALTER TABLE requests ADD COLUMN loop_id TEXT");
     }
   }
 
@@ -367,6 +374,55 @@ function getLog(limit = 50, actor) {
   return getDb().prepare('SELECT * FROM activity_log ORDER BY id DESC LIMIT ?').all(limit);
 }
 
+function getRequestHistory(requestId) {
+  const d = getDb();
+  const request = d.prepare('SELECT * FROM requests WHERE id = ?').get(requestId);
+  if (!request) return null;
+
+  const tasks = d.prepare(
+    'SELECT * FROM tasks WHERE request_id = ? ORDER BY id ASC'
+  ).all(requestId);
+
+  const merges = d.prepare(
+    'SELECT * FROM merge_queue WHERE request_id = ? ORDER BY id ASC'
+  ).all(requestId);
+
+  const taskIdSet = new Set(tasks.map(t => t.id));
+
+  // Get logs that mention this request_id directly in details
+  const requestLogs = d.prepare(
+    "SELECT * FROM activity_log WHERE details LIKE ? ORDER BY id ASC"
+  ).all(`%"request_id":"${requestId}"%`);
+
+  // Get logs for task-level events (task_created, task_assigned, task_completed, etc.)
+  // These reference task IDs as integers in JSON, so we fetch broadly and filter in JS
+  let taskLogs = [];
+  if (taskIdSet.size > 0) {
+    const candidates = d.prepare(
+      "SELECT * FROM activity_log WHERE action LIKE 'task_%' ORDER BY id ASC"
+    ).all();
+    taskLogs = candidates.filter(row => {
+      try {
+        const det = JSON.parse(row.details);
+        return det.task_id && taskIdSet.has(det.task_id);
+      } catch { return false; }
+    });
+  }
+
+  // Merge and deduplicate by id, preserving chronological order
+  const seenIds = new Set();
+  const logs = [];
+  for (const row of [...requestLogs, ...taskLogs]) {
+    if (!seenIds.has(row.id)) {
+      seenIds.add(row.id);
+      logs.push(row);
+    }
+  }
+  logs.sort((a, b) => a.id - b.id);
+
+  return { request, tasks, merges, logs };
+}
+
 // --- Config helpers ---
 
 function getConfig(key) {
@@ -531,6 +587,67 @@ function updateChange(id, fields) {
   getDb().prepare(`UPDATE changes SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
 }
 
+// --- Loop helpers ---
+
+function createLoop(prompt) {
+  // Detect id column type: older DBs use INTEGER, newer use TEXT
+  const colInfo = getDb().prepare("PRAGMA table_info(loops)").all().find(c => c.name === 'id');
+  const isTextId = colInfo && colInfo.type.toUpperCase() === 'TEXT';
+  if (isTextId) {
+    const id = 'loop-' + crypto.randomBytes(4).toString('hex');
+    getDb().prepare('INSERT INTO loops (id, prompt) VALUES (?, ?)').run(id, prompt);
+    log('user', 'loop_created', { loop_id: id, prompt });
+    return id;
+  }
+  // INTEGER PK — let SQLite auto-generate
+  const result = getDb().prepare('INSERT INTO loops (prompt) VALUES (?)').run(prompt);
+  const id = result.lastInsertRowid;
+  log('user', 'loop_created', { loop_id: id, prompt });
+  return id;
+}
+
+function getLoop(id) {
+  return getDb().prepare('SELECT * FROM loops WHERE id = ?').get(id);
+}
+
+function updateLoop(id, fields) {
+  validateColumns('loops', fields);
+  const sets = [];
+  const vals = [];
+  for (const [k, v] of Object.entries(fields)) {
+    sets.push(`${k} = ?`);
+    vals.push(v);
+  }
+  sets.push("updated_at = datetime('now')");
+  vals.push(id);
+  getDb().prepare(`UPDATE loops SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+}
+
+function listLoops(filters = {}) {
+  let sql = 'SELECT * FROM loops WHERE 1=1';
+  const vals = [];
+  if (filters.status) { sql += ' AND status = ?'; vals.push(filters.status); }
+  sql += ' ORDER BY created_at DESC';
+  return getDb().prepare(sql).all(...vals);
+}
+
+function createLoopRequest(loopId, description) {
+  const id = 'req-' + crypto.randomBytes(4).toString('hex');
+  const txn = getDb().transaction(() => {
+    getDb().prepare(`
+      INSERT INTO requests (id, description, loop_id) VALUES (?, ?, ?)
+    `).run(id, description, loopId);
+    sendMail('architect', 'new_request', { request_id: id, description, loop_id: loopId });
+    log('loop', 'loop_request_created', { request_id: id, loop_id: loopId, description });
+  });
+  txn();
+  return id;
+}
+
+function getLoopRequests(loopId) {
+  return getDb().prepare('SELECT * FROM requests WHERE loop_id = ? ORDER BY created_at DESC').all(loopId);
+}
+
 module.exports = {
   init, close, getDb,
   createRequest, getRequest, updateRequest, listRequests,
@@ -538,9 +655,10 @@ module.exports = {
   registerWorker, getWorker, updateWorker, getIdleWorkers, getAllWorkers, claimWorker, releaseWorker, checkRequestCompletion,
   sendMail, checkMail, checkMailBlocking, purgeOldMail,
   enqueueMerge, getNextMerge, updateMerge,
-  log, getLog,
+  log, getLog, getRequestHistory,
   getConfig, setConfig,
   savePreset, listPresets, getPreset, deletePreset,
   findOverlappingTasks, getOverlapsForRequest, hasOverlappingMergedTasks,
   createChange, getChange, listChanges, updateChange,
+  createLoop, getLoop, updateLoop, listLoops, createLoopRequest, getLoopRequests,
 };

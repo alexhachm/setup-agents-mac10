@@ -17,8 +17,11 @@ let wss = null;
 let setupProcess = null;
 let broadcastIntervalId = null;
 let pingIntervalId = null;
+let shutdownTimerId = null;
+let activeClientCount = 0;
+const SHUTDOWN_GRACE_MS = 60000; // 60s after last tab closes
 
-function start(projectDir, port = 3100, scriptDir = null) {
+function start(projectDir, port = 3100, scriptDir = null, callbacks = {}) {
   const app = express();
   server = http.createServer(app);
   wss = new WebSocket.Server({ server });
@@ -260,20 +263,13 @@ function start(projectDir, port = 3100, scriptDir = null) {
       MAC10_GUI_DIR: path.join(resolvedScriptDir, 'gui', 'public'),
     });
 
-    if (isWSL) {
-      const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
-      setupProcess = spawn('wsl.exe', ['-d', distro, '--', 'bash', setupScript, reqProjectDir, String(workers)], {
-        cwd: resolvedScriptDir,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    } else {
-      setupProcess = spawn('bash', [setupScript, reqProjectDir, String(workers)], {
-        cwd: resolvedScriptDir,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    }
+    // Always spawn bash directly — we're already inside the correct environment.
+    // (wsl.exe is only needed when opening NEW terminal tabs via wt.exe)
+    setupProcess = spawn('bash', [setupScript, reqProjectDir, String(workers)], {
+      cwd: resolvedScriptDir,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     // Stream stdout
     let buffer = '';
@@ -438,21 +434,12 @@ function start(projectDir, port = 3100, scriptDir = null) {
     ].join('\n');
 
     const pushEnv = { ...process.env, MAC10_REPO: repo, MAC10_REPO_DIR: repoDir };
-    let pushProc;
-    if (isWSL) {
-      const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
-      pushProc = spawn('wsl.exe', ['-d', distro, '--', 'bash', '-c', script], {
-        cwd: repoDir,
-        env: pushEnv,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    } else {
-      pushProc = spawn('bash', ['-c', script], {
-        cwd: repoDir,
-        env: pushEnv,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    }
+    // Spawn bash directly — already inside the correct environment
+    const pushProc = spawn('bash', ['-c', script], {
+      cwd: repoDir,
+      env: pushEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     let buf = '';
     pushProc.stdout.on('data', (chunk) => {
@@ -529,21 +516,12 @@ function start(projectDir, port = 3100, scriptDir = null) {
       const env = { ...process.env, MAC10_PORT: String(newPort) };
 
       const indexPath = path.join(__dirname, 'index.js');
-      let child;
-      if (isWSL) {
-        const distro = process.env.WSL_DISTRO_NAME || 'Ubuntu';
-        child = spawn('wsl.exe', ['-d', distro, '--', 'node', indexPath, reqDir], {
-          env,
-          stdio: 'ignore',
-          detached: true,
-        });
-      } else {
-        child = spawn('node', [indexPath, reqDir], {
-          env,
-          stdio: 'ignore',
-          detached: true,
-        });
-      }
+      // Spawn node directly — already inside the correct environment
+      const child = spawn('node', [indexPath, reqDir], {
+        env,
+        stdio: 'ignore',
+        detached: true,
+      });
       child.unref();
 
       // Wait for the new coordinator to start and register
@@ -654,11 +632,93 @@ function start(projectDir, port = 3100, scriptDir = null) {
     }
   });
 
-  // WebSocket for live updates
+  // --- Shutdown endpoint ---
+
+  app.post('/api/shutdown', (req, res) => {
+    res.json({ ok: true, message: 'Coordinator shutting down' });
+    db.log('coordinator', 'manual_shutdown', { source: 'gui' });
+    setTimeout(() => {
+      if (callbacks.onShutdown) callbacks.onShutdown();
+    }, 500);
+  });
+
+  // --- Loop endpoints ---
+
+  app.get('/api/loops', (req, res) => {
+    try {
+      res.json(db.listLoops(req.query));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/loop/start', (req, res) => {
+    try {
+      const { prompt } = req.body;
+      if (!prompt || typeof prompt !== 'string') {
+        return res.status(400).json({ ok: false, error: 'prompt is required and must be a string' });
+      }
+      const loopId = db.createLoop(prompt);
+      const loop = db.getLoop(loopId);
+
+      // Spawn sentinel via tmux
+      const sentinelPath = path.join(resolvedScriptDir, 'scripts', 'loop-sentinel.sh');
+      const repoDir = db.getConfig('project_dir') || projectDir;
+      const tmux = require('./tmux');
+      if (tmux.isAvailable()) {
+        const windowName = `loop-${loopId}`;
+        tmux.createWindow(windowName, `bash "${sentinelPath}" "${loopId}" "${repoDir}"`, repoDir);
+      }
+
+      db.log('gui', 'loop_started', { loop_id: loopId, prompt });
+      broadcast({ type: 'loop_started', loop_id: loopId });
+      res.json({ ok: true, loop_id: loopId });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/api/loop/stop', (req, res) => {
+    try {
+      const { loop_id } = req.body;
+      if (!loop_id || typeof loop_id !== 'string') {
+        return res.status(400).json({ ok: false, error: 'loop_id is required' });
+      }
+      const loop = db.getLoop(loop_id);
+      if (!loop) {
+        return res.status(404).json({ ok: false, error: `Loop ${loop_id} not found` });
+      }
+      db.updateLoop(loop_id, { status: 'stopped', stopped_at: new Date().toISOString() });
+      db.log('gui', 'loop_stopped', { loop_id });
+      broadcast({ type: 'loop_stopped', loop_id });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // WebSocket for live updates + auto-shutdown on zero clients
   wss.on('connection', (ws) => {
+    activeClientCount++;
+    if (shutdownTimerId) {
+      clearTimeout(shutdownTimerId);
+      shutdownTimerId = null;
+    }
+
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
     ws.on('error', () => {}); // prevent unhandled error crashes
+
+    ws.on('close', () => {
+      activeClientCount--;
+      if (activeClientCount <= 0 && !shutdownTimerId) {
+        shutdownTimerId = setTimeout(() => {
+          console.log('All GUI clients disconnected — shutting down coordinator.');
+          db.log('coordinator', 'auto_shutdown', { reason: 'no_gui_clients', grace_ms: SHUTDOWN_GRACE_MS });
+          if (callbacks.onShutdown) callbacks.onShutdown();
+        }, SHUTDOWN_GRACE_MS);
+      }
+    });
 
     // Send initial state
     try {
@@ -722,6 +782,7 @@ function broadcast(data) {
 }
 
 function stop() {
+  if (shutdownTimerId) { clearTimeout(shutdownTimerId); shutdownTimerId = null; }
   if (broadcastIntervalId) { clearInterval(broadcastIntervalId); broadcastIntervalId = null; }
   if (pingIntervalId) { clearInterval(pingIntervalId); pingIntervalId = null; }
   if (setupProcess) {

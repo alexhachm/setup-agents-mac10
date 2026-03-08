@@ -11,6 +11,7 @@
   let activeTabId = null;
   let tabIdCounter = 0;
   let instancePollTimer = null;
+  const closedPorts = new Set(); // ports the user explicitly closed — skip in polling
 
   // The "hub" port is the one the browser loaded from
   const hubPort = parseInt(location.port) || (location.protocol === 'https:' ? 443 : 80);
@@ -160,6 +161,7 @@
         return id;
       }
     }
+    closedPorts.delete(port); // user is re-adding this port
     const tab = createTabState(port, name, projectDir);
     tabs.set(tab.id, tab);
     connectTab(tab);
@@ -170,6 +172,11 @@
   function closeTab(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return;
+
+    // Shut down the coordinator for this tab and suppress re-adding via poll
+    closedPorts.add(tab.port);
+    tabFetch(tab, '/api/shutdown', { method: 'POST' }).catch(() => {});
+
     disconnectTab(tab);
     tabs.delete(tabId);
     if (activeTabId === tabId) {
@@ -201,6 +208,7 @@
         const activePorts = new Set();
         for (const inst of instances) {
           activePorts.add(inst.port);
+          if (closedPorts.has(inst.port)) continue; // user closed this tab
           addTab(inst.port, inst.name, inst.projectDir);
         }
         // Remove tabs for dead instances (except if manually added)

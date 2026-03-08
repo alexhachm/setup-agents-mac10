@@ -127,6 +127,20 @@ CREATE TABLE IF NOT EXISTS changes (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Autonomous loops
+CREATE TABLE IF NOT EXISTS loops (
+  id TEXT PRIMARY KEY,           -- 'loop-' + random hex
+  prompt TEXT NOT NULL,          -- user's directive
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active','stopped','error')),
+  checkpoint TEXT,               -- pipe-delimited state from loop-agent
+  iteration_count INTEGER NOT NULL DEFAULT 0,
+  last_heartbeat TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  stopped_at TEXT
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_request ON tasks(request_id);
@@ -144,6 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_overlap ON tasks(overlap_with) WHERE overlap_with IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_changes_domain ON changes(domain);
 CREATE INDEX IF NOT EXISTS idx_changes_status ON changes(status);
+CREATE INDEX IF NOT EXISTS idx_loops_status ON loops(status);
 
 -- Default config
 INSERT OR IGNORE INTO config (key, value) VALUES

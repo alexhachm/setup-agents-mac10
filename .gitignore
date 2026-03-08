@@ -1,5 +1,7 @@
 node_modules/
 .claude/state/
+**/state/mac10.sock.path
+**/state/mac10.tcp.port
 *.db
 *.db-shm
 *.db-wal

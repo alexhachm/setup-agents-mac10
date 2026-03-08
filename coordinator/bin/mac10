@@ -5,8 +5,25 @@ const net = require('net');
 const path = require('path');
 const fs = require('fs');
 
+function formatDuration(ms) {
+  if (ms < 1000) return '<1s';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return `${m}m ${rs}s`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return `${h}h ${rm}m`;
+}
+
 // Connection target: either a socket path (string) or TCP config ({host, port})
 // Priority: Unix socket (fastest, native) > TCP bridge > Windows named pipe
+function parseLoopId(val) {
+  const n = parseInt(val, 10);
+  return String(n) === val ? n : val; // integer if purely numeric, else string
+}
+
 function findConnectionTarget() {
   if (process.env.MAC10_SOCKET) return process.env.MAC10_SOCKET;
 
@@ -480,6 +497,12 @@ async function main() {
         else console.error(result.error);
         break;
 
+      case 'shutdown':
+        result = await send(socketPath, 'shutdown', {});
+        if (result.ok) console.log('Coordinator shutting down.');
+        else console.error(result.error);
+        break;
+
       case 'add-worker':
         result = await send(socketPath, 'add-worker', {});
         if (result.ok) console.log(`Worker ${result.worker_id} created (${result.worktree_path}, branch: ${result.branch})`);
@@ -555,47 +578,172 @@ async function main() {
         result = await send(socketPath, 'history', { request_id: argv[1] });
         if (result.ok) {
           const r = result.request;
+
+          // --- Duration ---
+          const createdMs = new Date(r.created_at + 'Z').getTime();
+          let durationStr = 'ongoing';
+          if (r.completed_at) {
+            const completedMs = new Date(r.completed_at + 'Z').getTime();
+            durationStr = formatDuration(completedMs - createdMs);
+          } else {
+            const elapsed = Date.now() - createdMs;
+            durationStr = `ongoing (${formatDuration(elapsed)} so far)`;
+          }
+
           console.log(`\n=== Request: ${r.id} ===`);
-          console.log(`  Status: ${r.status}  Tier: ${r.tier || '?'}  Created: ${r.created_at}`);
+          console.log(`  Status: ${r.status}  Tier: ${r.tier || '?'}  Duration: ${durationStr}`);
+          console.log(`  Created: ${r.created_at}${r.completed_at ? `  Completed: ${r.completed_at}` : ''}`);
           console.log(`  ${r.description.slice(0, 120)}`);
           if (r.result) console.log(`  Result: ${r.result}`);
+
+          // --- Task summary ---
           if (result.tasks.length > 0) {
-            console.log('\n--- Tasks ---');
+            const completed = result.tasks.filter(t => t.status === 'completed').length;
+            const failed = result.tasks.filter(t => t.status === 'failed').length;
+            const total = result.tasks.length;
+            console.log(`\n--- Tasks (${completed}/${total} completed${failed ? `, ${failed} failed` : ''}) ---`);
             for (const t of result.tasks) {
-              const w = t.assigned_to ? ` → worker-${t.assigned_to}` : '';
+              const w = t.assigned_to ? ` -> worker-${t.assigned_to}` : '';
               const pr = t.pr_url ? ` PR: ${t.pr_url}` : '';
               console.log(`  #${t.id} [${t.status}] ${t.subject.slice(0, 50)}${w}${pr}`);
             }
           }
+
+          // --- Merges ---
           if (result.merges.length > 0) {
-            console.log('\n--- Merges ---');
+            const merged = result.merges.filter(m => m.status === 'merged').length;
+            console.log(`\n--- Merges (${merged}/${result.merges.length} merged) ---`);
             for (const m of result.merges) {
               console.log(`  #${m.id} [${m.status}] ${m.branch || '(no branch)'}${m.error ? ` error: ${m.error.slice(0, 60)}` : ''}`);
             }
           }
+
+          // --- Timeline with phases and elapsed times ---
           if (result.logs.length > 0) {
             console.log('\n--- Timeline ---');
+            const phaseOrder = ['triage', 'decomposition', 'execution', 'merge', 'completion', 'other'];
+            const phaseMap = {
+              request_created: 'triage', request_acknowledged: 'triage', tier_assigned: 'triage',
+              request_triaged: 'decomposition', tasks_created: 'decomposition', task_created: 'decomposition',
+              task_assigned: 'execution', task_started: 'execution', task_completed: 'execution', task_failed: 'execution',
+              merge_requested: 'merge', merge_started: 'merge', merge_completed: 'merge', merge_failed: 'merge',
+              request_completed: 'completion', request_failed: 'completion',
+            };
+
+            let prevTime = null;
+            let currentPhase = null;
             for (const l of result.logs) {
+              const phase = phaseMap[l.action] || 'other';
+              if (phase !== currentPhase) {
+                currentPhase = phase;
+                console.log(`  -- ${phase.toUpperCase()} --`);
+              }
+
+              const logTime = new Date(l.created_at + 'Z').getTime();
+              let elapsed = '';
+              if (prevTime !== null) {
+                const diff = logTime - prevTime;
+                if (diff >= 1000) elapsed = ` (+${formatDuration(diff)})`;
+              }
+              prevTime = logTime;
+
               let details = '';
               try {
                 const d = JSON.parse(l.details);
                 const parts = [];
                 if (d.tier) parts.push(`tier=${d.tier}`);
                 if (d.worker_id) parts.push(`worker=${d.worker_id}`);
-                if (d.task_id) parts.push(`task=${d.task_id}`);
+                if (d.task_id) parts.push(`task=#${d.task_id}`);
+                if (d.subject) parts.push(d.subject.slice(0, 40));
                 if (d.pr_url) parts.push(`pr=${d.pr_url}`);
                 if (d.reasoning) parts.push(d.reasoning.slice(0, 60));
                 if (d.result) parts.push(d.result.slice(0, 60));
                 if (d.error) parts.push(`error: ${d.error.slice(0, 60)}`);
                 details = parts.length > 0 ? ` ${parts.join(', ')}` : '';
               } catch {}
-              console.log(`  [${l.created_at}] ${l.actor}: ${l.action}${details}`);
+              console.log(`  [${l.created_at}] ${l.actor}: ${l.action}${details}${elapsed}`);
             }
           }
           console.log('');
         } else console.error(result.error);
         break;
       }
+
+      // LOOPS
+      case 'loop':
+        if (argv.length < 2) { console.error('Usage: mac10 loop <prompt>'); process.exit(1); }
+        result = await send(socketPath, 'loop', { prompt: argv.slice(1).join(' ') });
+        if (result.ok) console.log(`Loop started: ${result.loop_id}`);
+        else console.error(result.error);
+        break;
+
+      case 'stop-loop':
+        if (!argv[1]) { console.error('Usage: mac10 stop-loop <loop_id>'); process.exit(1); }
+        result = await send(socketPath, 'stop-loop', { loop_id: parseLoopId(argv[1]) });
+        if (result.ok) console.log('Loop stopped.');
+        else console.error(result.error);
+        break;
+
+      case 'loop-status':
+        result = await send(socketPath, 'loop-status', {});
+        if (result.ok) {
+          if (result.loops.length === 0) {
+            console.log('No loops.');
+          } else {
+            console.log('\n=== Loops ===');
+            for (const l of result.loops) {
+              const iter = l.iteration_count ? ` iter:${l.iteration_count}` : '';
+              const hb = l.last_heartbeat ? ` hb:${l.last_heartbeat}` : '';
+              console.log(`  ${l.id} [${l.status}]${iter}${hb} ${l.prompt.slice(0, 60)}`);
+            }
+            console.log('');
+          }
+        } else console.error(result.error);
+        break;
+
+      case 'loop-prompt':
+        if (!argv[1]) { console.error('Usage: mac10 loop-prompt <loop_id>'); process.exit(1); }
+        result = await send(socketPath, 'loop-prompt', { loop_id: parseLoopId(argv[1]) });
+        console.log(JSON.stringify(result));
+        break;
+
+      case 'loop-requests':
+        if (!argv[1]) { console.error('Usage: mac10 loop-requests <loop_id>'); process.exit(1); }
+        result = await send(socketPath, 'loop-requests', { loop_id: parseLoopId(argv[1]) });
+        console.log(JSON.stringify(result));
+        break;
+
+      case 'loop-request':
+        if (argv.length < 3) { console.error('Usage: mac10 loop-request <loop_id> <description>'); process.exit(1); }
+        result = await send(socketPath, 'loop-request', {
+          loop_id: parseLoopId(argv[1]),
+          description: argv.slice(2).join(' '),
+        });
+        if (result.ok) console.log(`Request submitted: ${result.request_id}`);
+        else console.error(result.error);
+        break;
+
+      case 'loop-heartbeat':
+        if (!argv[1]) { console.error('Usage: mac10 loop-heartbeat <loop_id>'); process.exit(1); }
+        result = await send(socketPath, 'loop-heartbeat', { loop_id: parseLoopId(argv[1]) });
+        if (result.ok) {
+          console.log('ok');
+        } else {
+          if (result.exit_code === 2) process.exit(2);
+          console.error(result.error || 'Loop not active');
+          process.exit(2);
+        }
+        break;
+
+      case 'loop-checkpoint':
+        if (argv.length < 3) { console.error('Usage: mac10 loop-checkpoint <loop_id> <checkpoint>'); process.exit(1); }
+        result = await send(socketPath, 'loop-checkpoint', {
+          loop_id: parseLoopId(argv[1]),
+          checkpoint: argv.slice(2).join(' '),
+        });
+        if (result.ok) console.log('Checkpoint saved.');
+        else console.error(result.error);
+        break;
 
       default:
         console.error(`Unknown command: ${cmd}`);
@@ -648,9 +796,20 @@ CHANGES:
   log-change <desc> [--domain X] [--file Y] [--fn Z] [--tooltip T]
   list-changes [domain]          List all changes (optionally filter by domain)
 
+LOOPS:
+  loop <prompt>                  Start an autonomous loop
+  stop-loop <loop_id>            Stop a running loop
+  loop-status                    Show all loops
+  loop-prompt <loop_id>          Get loop prompt & state (JSON)
+  loop-requests <loop_id>        Get requests created by loop (JSON)
+  loop-request <loop_id> <desc>  Submit a request from within a loop
+  loop-heartbeat <loop_id>       Check loop liveness (exit 2 if stopped)
+  loop-checkpoint <loop_id> <s>  Save checkpoint state
+
 SYSTEM:
   start [project_dir]            Start coordinator
-  stop                           Stop coordinator
+  stop                           Stop coordinator (remove socket)
+  shutdown                       Shutdown coordinator immediately
   repair                         Fix stuck state
   add-worker                     Create a new worker worktree (up to max_workers)
   merge-status [request_id]      Show merge queue entries
