@@ -56,6 +56,7 @@ const COMMAND_SCHEMAS = {
   'update-change':     { required: ['id'], types: { id: 'number' } },
   'integrate':         { required: ['request_id'], types: { request_id: 'string' } },
   'reset-merges':      { required: [], types: { request_id: 'string' } },
+  'history':           { required: ['request_id'], types: { request_id: 'string' } },
 };
 
 /** Parse a files field into an array. Handles arrays, JSON strings, and comma-separated strings. */
@@ -223,6 +224,7 @@ function handleCommand(cmd, conn, handlers) {
             tier: 2,
           });
           db.updateTask(taskId, { status: 'ready' });
+          db.log('user', 'urgent_fix_created', { request_id: id, task_id: taskId, description: args.description });
           return { request_id: id, task_id: taskId };
         })();
         respond(conn, { ok: true, ...fixResult });
@@ -244,6 +246,7 @@ function handleCommand(cmd, conn, handlers) {
           request_id: args.request_id,
           message: args.message,
         });
+        db.log('user', 'clarification_answered', { request_id: args.request_id, message: args.message });
         respond(conn, { ok: true });
         break;
       }
@@ -521,11 +524,13 @@ function handleCommand(cmd, conn, handlers) {
       }
       case 'claim-worker': {
         const success = db.claimWorker(args.worker_id, args.claimer);
+        if (success) db.log(args.claimer, 'worker_claimed', { worker_id: args.worker_id });
         respond(conn, { ok: true, claimed: success });
         break;
       }
       case 'release-worker': {
         db.releaseWorker(args.worker_id);
+        db.log('coordinator', 'worker_released', { worker_id: args.worker_id });
         respond(conn, { ok: true });
         break;
       }
@@ -762,6 +767,25 @@ function handleCommand(cmd, conn, handlers) {
         const updated = db.getChange(changeId2);
         if (handlers.onChangeUpdated) handlers.onChangeUpdated(updated);
         respond(conn, { ok: true });
+        break;
+      }
+
+      // === HISTORY command ===
+      case 'history': {
+        const reqId = args.request_id;
+        const req = db.getRequest(reqId);
+        if (!req) {
+          respond(conn, { ok: false, error: `Request ${reqId} not found` });
+          break;
+        }
+        const tasks = db.listTasks({ request_id: reqId });
+        const logs = db.getDb().prepare(
+          "SELECT * FROM activity_log WHERE details LIKE ? ORDER BY id ASC"
+        ).all(`%${reqId}%`);
+        const merges = db.getDb().prepare(
+          "SELECT * FROM merge_queue WHERE request_id = ? ORDER BY id ASC"
+        ).all(reqId);
+        respond(conn, { ok: true, request: req, tasks, logs, merges });
         break;
       }
 

@@ -550,6 +550,53 @@ async function main() {
         break;
       }
 
+      case 'history': {
+        if (!argv[1]) { console.error('Usage: mac10 history <request_id>'); process.exit(1); }
+        result = await send(socketPath, 'history', { request_id: argv[1] });
+        if (result.ok) {
+          const r = result.request;
+          console.log(`\n=== Request: ${r.id} ===`);
+          console.log(`  Status: ${r.status}  Tier: ${r.tier || '?'}  Created: ${r.created_at}`);
+          console.log(`  ${r.description.slice(0, 120)}`);
+          if (r.result) console.log(`  Result: ${r.result}`);
+          if (result.tasks.length > 0) {
+            console.log('\n--- Tasks ---');
+            for (const t of result.tasks) {
+              const w = t.assigned_to ? ` → worker-${t.assigned_to}` : '';
+              const pr = t.pr_url ? ` PR: ${t.pr_url}` : '';
+              console.log(`  #${t.id} [${t.status}] ${t.subject.slice(0, 50)}${w}${pr}`);
+            }
+          }
+          if (result.merges.length > 0) {
+            console.log('\n--- Merges ---');
+            for (const m of result.merges) {
+              console.log(`  #${m.id} [${m.status}] ${m.branch || '(no branch)'}${m.error ? ` error: ${m.error.slice(0, 60)}` : ''}`);
+            }
+          }
+          if (result.logs.length > 0) {
+            console.log('\n--- Timeline ---');
+            for (const l of result.logs) {
+              let details = '';
+              try {
+                const d = JSON.parse(l.details);
+                const parts = [];
+                if (d.tier) parts.push(`tier=${d.tier}`);
+                if (d.worker_id) parts.push(`worker=${d.worker_id}`);
+                if (d.task_id) parts.push(`task=${d.task_id}`);
+                if (d.pr_url) parts.push(`pr=${d.pr_url}`);
+                if (d.reasoning) parts.push(d.reasoning.slice(0, 60));
+                if (d.result) parts.push(d.result.slice(0, 60));
+                if (d.error) parts.push(`error: ${d.error.slice(0, 60)}`);
+                details = parts.length > 0 ? ` ${parts.join(', ')}` : '';
+              } catch {}
+              console.log(`  [${l.created_at}] ${l.actor}: ${l.action}${details}`);
+            }
+          }
+          console.log('');
+        } else console.error(result.error);
+        break;
+      }
+
       default:
         console.error(`Unknown command: ${cmd}`);
         printUsage();
@@ -571,6 +618,7 @@ USER:
   status                         Show all requests, tasks, and workers
   clarify <request_id> <msg>     Reply to architect clarification
   log [limit] [actor]            Show activity log
+  history <request_id>           Show full lifecycle of a request
 
 ARCHITECT:
   triage <request_id> <tier> [reasoning]
